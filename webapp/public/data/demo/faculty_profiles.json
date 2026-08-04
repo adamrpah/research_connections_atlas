@@ -1,0 +1,17 @@
+[
+  {
+    "faculty_id": "faculty-example",
+    "display_name": "Example Researcher",
+    "publication_count": 1,
+    "topic_count": 1,
+    "topics": [
+      {
+        "target": "topic-example",
+        "publication_count": 1,
+        "share_of_faculty_clustered_publications": 1.0,
+        "mean_topic_probability": 1.0,
+        "recency_weighted_publication_count": 1.0
+      }
+    ]
+  }
+]

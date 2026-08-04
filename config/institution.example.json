@@ -1,0 +1,15 @@
+{
+  "institution_name": "Example College",
+  "atlas_name": "Example College Research Connections Atlas",
+  "short_brand": "EC",
+  "feedback_export_url": "https://atlas.example.edu/api/feedback?export=attribution",
+  "faculty_aliases": {
+    "alex q smith": "Alex Quinn Smith"
+  },
+  "non_person_headings": [
+    "refereed journal articles",
+    "journal articles",
+    "book chapters"
+  ],
+  "notes": "Copy to config/institution.local.json and adapt locally. Do not include confidential identifiers."
+}

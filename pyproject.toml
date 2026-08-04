@@ -1,0 +1,25 @@
+[project]
+name = "research-connections-atlas"
+version = "0.1.0"
+description = "Reproducible scholarly-impact data pipeline and research-connections atlas"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+dependencies = [
+  "numpy>=2.0,<3",
+  "openpyxl>=3.1,<4",
+  "pandas>=2.2,<3",
+]
+
+[project.optional-dependencies]
+topic = [
+  "adapters>=1.1",
+  "hdbscan>=0.8.40",
+  "scikit-learn>=1.5",
+  "torch>=2.4",
+  "transformers>=4.45",
+  "umap-learn>=0.5.7",
+]
+dev = []
+
+[tool.uv]
+package = false

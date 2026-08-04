@@ -1,0 +1,11 @@
+[
+  {
+    "id": "topic-example",
+    "model_topic_id": 0,
+    "label": "Community Research",
+    "description": "Demonstration topic included with a fresh checkout.",
+    "publication_count": 1,
+    "top_terms": ["community", "research"],
+    "representative_titles": ["A Demonstration Publication"]
+  }
+]

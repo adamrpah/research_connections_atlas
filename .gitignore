@@ -1,0 +1,62 @@
+# Operating-system and editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Credentials and local configuration
+.secrets/
+.env
+.env.*
+!.env.example
+config/institution.local.json
+*.pem
+*.key
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+
+# JavaScript / web build outputs
+webapp/node_modules/
+webapp/.next/
+webapp/.vinext/
+webapp/dist/
+webapp/out/
+webapp/.wrangler/
+webapp/outputs/
+webapp/work/
+webapp/coverage/
+webapp/next-env.d.ts
+
+# Source records and generated research data. Keep only templates/examples in Git.
+data/Annual-Reports/*
+!data/Annual-Reports/.gitkeep
+data/DigitalMeasure-Reports/*
+!data/DigitalMeasure-Reports/.gitkeep
+data/publication_pdfs/
+data/publication_abstracts/
+data/model_cache/
+data/Annual Report compilation.xlsx
+data/publication_metadata_curation.xlsx
+data/publication_metadata_curation.xlsx.inspect.ndjson
+results/
+
+# Generated application dataset. A checkout starts with the small demo fixture.
+webapp/public/data/*.json
+webapp/public/data/*.npy
+!webapp/public/data/demo/
+!webapp/public/data/demo/**
+
+# Temporary files
+tmp/
+*.tmp
+~$*
+
+# Local backup used when consolidating the historical nested webapp repository.
+.legacy-repos/

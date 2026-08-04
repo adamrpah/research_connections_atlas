@@ -1,0 +1,14 @@
+[
+  {
+    "id": "edge-example-topic",
+    "source": "faculty-example",
+    "target": "topic-example",
+    "publication_count": 1,
+    "share_of_faculty_clustered_publications": 1.0,
+    "mean_topic_probability": 1.0,
+    "recency_weighted_publication_count": 1.0,
+    "first_publication_year": 2025,
+    "last_publication_year": 2025,
+    "publication_ids": ["publication-example"]
+  }
+]

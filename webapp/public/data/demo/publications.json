@@ -1,0 +1,17 @@
+[
+  {
+    "id": "publication-example",
+    "title": "A Demonstration Publication",
+    "publication_year": 2025,
+    "doi": null,
+    "landing_url": null,
+    "abstract": "This synthetic record demonstrates the atlas interface without including institutional or personal data.",
+    "authors": ["Example Researcher"],
+    "faculty_ids": ["faculty-example"],
+    "topic_id": "topic-example",
+    "model_topic_id": 0,
+    "topic_probability": 1.0,
+    "coordinates": { "x": 0.0, "y": 0.0 },
+    "quality": { "has_abstract": true, "has_pdf": false, "match_score": null }
+  }
+]
