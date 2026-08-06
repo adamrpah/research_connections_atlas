@@ -21,7 +21,7 @@ import numpy as np
 import pandas as pd
 
 
-SCHEMA_VERSION = "1.0.0"
+SCHEMA_VERSION = "1.1.0"
 
 
 def text(value: Any) -> str:
@@ -40,6 +40,38 @@ def scalar(value: Any) -> Any:
     if isinstance(value, np.bool_):
         return bool(value)
     return value
+
+
+IMPACT_BOOLEAN_FIELDS = {"is_top_10_percent", "is_top_1_percent", "is_oa", "is_retracted", "is_uncited"}
+IMPACT_INTEGER_FIELDS = {
+    "publication_year", "cited_by_count", "same_year_percentile_min",
+    "same_year_percentile_max", "referenced_works_count", "citations_last_1_year",
+    "citations_last_2_years", "citations_last_5_years",
+    "years_since_earliest_reported_citation", "citation_active_years",
+    "attributed_publication_count", "publications_with_openalex_metrics", "total_citations",
+    "uncited_publication_count", "top_10_percent_count", "top_1_percent_count",
+    "corpus_h_index", "corpus_i10_index",
+}
+IMPACT_NUMBER_FIELDS = {
+    "fwci", "citation_percentile", "publication_age_years", "citations_per_year",
+    "recent_citation_share", "impact_coverage_share", "mean_citations", "median_citations",
+    "uncited_publication_share", "mean_fwci", "median_fwci", "top_10_percent_share",
+    "top_1_percent_share",
+}
+
+
+def impact_value(key: str, value: Any) -> Any:
+    if not text(value):
+        return None
+    if key == "citations_by_year":
+        return parse_json_list(value)
+    if key in IMPACT_BOOLEAN_FIELDS:
+        return text(value).casefold() == "true"
+    if key in IMPACT_INTEGER_FIELDS:
+        return int(float(value))
+    if key in IMPACT_NUMBER_FIELDS:
+        return float(value)
+    return scalar(value)
 
 
 def stable_id(prefix: str, key: str, length: int = 16) -> str:
@@ -100,6 +132,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--candidates", type=Path, default=Path("results/publication_candidates.csv"))
     parser.add_argument("--resolution", type=Path, default=Path("results/publication_resolution/publication_resolution.csv"))
     parser.add_argument("--topic-dir", type=Path, default=Path("results/topic_model_specter2"))
+    parser.add_argument("--work-impact", type=Path, default=Path("results/impact/current_work_impact.csv"))
+    parser.add_argument("--faculty-impact", type=Path, default=Path("results/impact/faculty_impact_summary.csv"))
     parser.add_argument("--output-dir", type=Path, default=Path("results/webapp"))
     parser.add_argument("--similarity-neighbors", type=int, default=10)
     parser.add_argument("--min-similarity", type=float, default=0.35)
@@ -115,6 +149,16 @@ def main() -> None:
     articles = pd.read_csv(args.topic_dir / "labeled_article_topics.csv", dtype={"record_id": str}).fillna("")
     topic_frame = pd.read_csv(args.topic_dir / "labeled_topics.csv").fillna("")
     faculty_works = pd.read_csv(args.topic_dir / "faculty_topic_publications.csv", dtype={"record_id": str}).fillna("")
+    work_impact = pd.read_csv(args.work_impact).fillna("") if args.work_impact.exists() else pd.DataFrame()
+    faculty_impact = pd.read_csv(args.faculty_impact).fillna("") if args.faculty_impact.exists() else pd.DataFrame()
+    impact_by_publication = (
+        work_impact.set_index("publication_id", drop=False).to_dict(orient="index")
+        if not work_impact.empty else {}
+    )
+    impact_by_faculty = (
+        faculty_impact.set_index("faculty_name", drop=False).to_dict(orient="index")
+        if not faculty_impact.empty else {}
+    )
     embeddings = np.load(args.topic_dir / "embeddings.npy")
     if len(articles) != len(embeddings):
         raise ValueError("Article assignments and embedding rows are not aligned")
@@ -140,12 +184,15 @@ def main() -> None:
     faculties = []
     for name in faculty_names:
         years = faculty_source_years[name]
+        impact = impact_by_faculty.get(name, {})
         faculties.append({
             "id": faculty_ids[name], "feedback_target_id": faculty_ids[name],
             "display_name": name, "aliases": sorted(aliases[name], key=str.casefold),
             "first_report_year": min(years) if years else None,
             "last_report_year": max(years) if years else None,
             "role_status": "faculty_or_report_attributed_researcher",
+            "impact": {key: impact_value(key, value) for key, value in impact.items()
+                       if key not in {"faculty_id", "faculty_name"}} if impact else None,
         })
 
     # Topic registry includes an explicit unclustered entity so every publication
@@ -235,6 +282,12 @@ def main() -> None:
                 "match_score": float(best["match_score"]) if text(best.get("match_score")) else None,
             },
         }
+        impact = impact_by_publication.get(pid, {})
+        publication["impact"] = ({
+            key: impact_value(key, value)
+            for key, value in impact.items()
+            if key not in {"publication_id", "doi", "canonical_title"}
+        } if impact else None)
         publications.append(publication)
         search_documents.append({
             "id": f"search_{pid}", "entity_type": "publication", "entity_id": pid,
@@ -302,6 +355,9 @@ def main() -> None:
             "faculty_id": faculty_ids[name], "display_name": name,
             "publication_count": len(work_ids), "topic_count": len(edges),
             "topics": [{key: edge[key] for key in ("target", "publication_count", "share_of_faculty_clustered_publications", "mean_topic_probability", "recency_weighted_publication_count")} for edge in edges],
+            "impact": ({key: impact_value(key, value) for key, value in impact_by_faculty[name].items()
+                        if key not in {"faculty_id", "faculty_name"}}
+                       if name in impact_by_faculty else None),
         })
         search_documents.append({
             "id": f"search_{faculty_ids[name]}", "entity_type": "faculty", "entity_id": faculty_ids[name],
@@ -425,6 +481,8 @@ def main() -> None:
             "faculty_similarity_edges": len(faculty_similarity_edges),
             "publication_faculty_edges": len(publication_faculty_edges),
             "coauthor_edges": 0, "search_documents": len(search_documents),
+            "publications_with_impact": sum(item["impact"] is not None for item in publications),
+            "faculty_with_impact": sum(item["impact"] is not None for item in faculties),
         },
         "validation": checks,
         "coauthor_status": "pending_author_identity_resolution",

@@ -268,3 +268,47 @@ fac_example1234567,Jane Q. Scholar,0000-0002-1825-0097,faculty_provided,2026-08-
 Set `FEEDBACK_EXPORT_URL` (or pass `--url` directly to
 `fetch_attribution_feedback.py`) for the deployed college-specific feedback endpoint.
 The default source code intentionally contains no personal deployment URL.
+
+## Publication and faculty impact
+
+Refresh one OpenAlex impact record per matched publication with:
+
+```bash
+.venv/bin/python code/refresh_openalex_impact.py \
+  --openalex-api-key-file .secrets/openalex-api-key.txt
+```
+
+This stage stores no individual citing works or citation edges. It writes the latest
+publication measures to `results/impact/current_work_impact.csv` and appends successful
+dated observations to `results/impact/work_impact_snapshots.csv`. Measures supplied by
+OpenAlex include total and annual citation counts, FWCI, normalized citation percentile,
+top-one/top-ten-percent flags, same-year percentile bounds, bibliography size, open-access
+status, and retraction status. Locally calculated measures include publication age,
+citations per year, recent one/two/five-year citations, recent citation share, active
+citation years, years since the earliest citation in OpenAlex's reported ten-year
+window, and uncited status. `impact_qa.json` records
+coverage and failures while retaining the last successful current observation.
+
+Faculty measures are deliberately calculated only after canonical-name matching,
+OpenAlex author disambiguation, and reviewed attribution overrides:
+
+```bash
+.venv/bin/python code/build_faculty_impact_summary.py
+```
+
+`results/impact/faculty_impact_summary.csv` contains corpus-scoped citation totals,
+coverage, means and medians, normalized-impact shares, recent citations, and explicitly
+named `corpus_h_index` and `corpus_i10_index` values. These are derived only from works
+accepted into this dataset; OpenAlex lifetime author totals are not used. The web-data
+builder embeds available current work and faculty measures in `publications.json`,
+`faculty.json`, and `faculty_profiles.json`.
+
+Population runs refresh publication impact automatically when an OpenAlex key is
+provided. Analytical refreshes reuse the current work file, calculate faculty measures
+after attribution, and can also refresh OpenAlex first with:
+
+```bash
+.venv/bin/python code/run_refresh_pipeline.py \
+  --refresh-openalex-impact \
+  --openalex-api-key-file .secrets/openalex-api-key.txt
+```

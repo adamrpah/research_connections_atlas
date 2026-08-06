@@ -86,6 +86,8 @@ def main() -> None:
     parser.add_argument("--skip-openalex-fallback", action="store_true")
     parser.add_argument("--skip-resolution", action="store_true", help="Extract and reconcile without network resolution")
     parser.add_argument("--skip-reconciliation", action="store_true")
+    parser.add_argument("--skip-impact-refresh", action="store_true",
+                        help="Do not retrieve publication-level OpenAlex impact measures")
     parser.add_argument("--dry-run", action="store_true", help="Extract and report candidate changes without modifying results or resolving")
     args = parser.parse_args()
 
@@ -184,6 +186,17 @@ def main() -> None:
             python, str(root / "code/apply_publication_metadata_curation.py"),
             "--resolution", str(resolution_path),
         ], "human metadata curation", root)
+        if args.openalex_api_key_file and not args.skip_impact_refresh:
+            impact_command = [
+                python, str(root / "code/refresh_openalex_impact.py"),
+                "--resolution", str(resolution_path),
+                "--openalex-api-key-file", str(root / args.openalex_api_key_file),
+            ]
+            if args.limit is not None:
+                impact_command += ["--limit", str(args.limit)]
+            run(impact_command, "OpenAlex publication impact refresh", root)
+        elif not args.openalex_api_key_file and not args.skip_impact_refresh:
+            print("\n[OpenAlex publication impact] skipped: no --openalex-api-key-file supplied")
 
     if not args.skip_reconciliation:
         run([
