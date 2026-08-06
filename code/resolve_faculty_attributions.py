@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Resolve publications to faculty using returned OpenAlex author metadata only.
+"""Resolve publications to faculty using local citation and OpenAlex evidence.
 
-The faculty registry defines the population and its name aliases. Annual-report
-headings, citation text, and feedback overrides never create or remove attribution
-links in this stage.
+The Digital Measures faculty registry bounds the institutional population before
+network resolution. Provisional citation-based links keep unmatched works usable;
+OpenAlex authorships subsequently enrich and disambiguate those links.
 """
 
 from __future__ import annotations
@@ -48,6 +48,16 @@ def split_values(value: Any) -> list[str]:
 
 
 def openalex_authorships(value: Any) -> list[dict]:
+    if not str(value or "").strip():
+        return []
+    try:
+        records = json.loads(str(value))
+    except json.JSONDecodeError:
+        return []
+    return records if isinstance(records, list) else []
+
+
+def institutional_author_evidence(value: Any) -> list[dict]:
     if not str(value or "").strip():
         return []
     try:
@@ -171,30 +181,93 @@ def resolve_authorship(authorship: dict, alias_sets: dict[str, set[str]], profil
     }
 
 
+def merge_attribution_evidence(
+    provisional: dict[str, dict], openalex_found: dict[str, dict], has_openalex_authorships: bool,
+) -> tuple[dict[str, dict], list[str]]:
+    """Merge local evidence, withholding owner-only links contradicted by author data."""
+    found = dict(openalex_found)
+    rejected = []
+    for faculty, evidence in provisional.items():
+        owner_only = evidence["basis"] == "digital_measures_resume_owner"
+        if owner_only and has_openalex_authorships and faculty not in openalex_found:
+            rejected.append(faculty)
+            continue
+        previous = found.get(faculty)
+        if previous is None or evidence["confidence"] > previous["confidence"]:
+            found[faculty] = evidence
+    return found, rejected
+
+
+def faculty_active_in_years(active_years: set[str], publication_years: set[str]) -> bool:
+    """Bound roster matching to years when both sources provide temporal evidence."""
+    return not active_years or not publication_years or bool(active_years & publication_years)
+
+
+def apply_attribution_overrides(
+    found: dict[str, dict], overrides: list[dict], publication_id: str, roster: set[str],
+) -> dict[str, dict]:
+    """Apply reviewed add/remove decisions to one publication's attribution set."""
+    updated = dict(found)
+    for override in overrides:
+        if str(override.get("publication_id", "")) != publication_id:
+            continue
+        faculty = clean_name(override.get("faculty_name"))
+        if faculty not in roster:
+            raise ValueError(f"Attribution override references unknown faculty: {faculty}")
+        action = str(override.get("action", "")).casefold()
+        if action == "remove":
+            updated.pop(faculty, None)
+        elif action == "add":
+            evidence = {
+                "basis": "human_review_override", "action": "add", "faculty_name": faculty,
+                "decision_id": override.get("decision_id", ""),
+                "feedback_id": override.get("feedback_id", ""),
+                "reason": override.get("reason", ""),
+            }
+            updated[faculty] = {
+                "basis": "human_review_override", "confidence": 1.0,
+                "evidence": json.dumps(evidence, ensure_ascii=False, separators=(",", ":")),
+            }
+        else:
+            raise ValueError(f"Unsupported attribution override action: {action}")
+    return updated
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--candidates", type=Path, default=Path("results/publication_candidates.csv"))
     parser.add_argument("--articles", type=Path, default=Path("results/topic_model_specter2/labeled_article_topics.csv"))
     parser.add_argument("--resolution", type=Path, default=Path("results/publication_resolution/publication_resolution.csv"))
-    parser.add_argument("--faculty-registry", type=Path, default=Path("results/faculty_attribution/faculty_registry.csv"))
+    parser.add_argument("--faculty-registry", type=Path, default=Path("results/institutional_faculty_registry.csv"))
+    parser.add_argument("--overrides", type=Path, default=Path("data/faculty_attribution_overrides.csv"))
     parser.add_argument("--output-dir", type=Path, default=Path("results/faculty_attribution"))
     parser.add_argument("--topic-dir", type=Path, default=Path("results/topic_model_specter2"))
     args = parser.parse_args()
     args.output_dir.mkdir(parents=True, exist_ok=True)
+    args.topic_dir.mkdir(parents=True, exist_ok=True)
 
     candidates = pd.read_csv(args.candidates, dtype={"record_id": str}).fillna("")
     articles = pd.read_csv(args.articles, dtype={"record_id": str, "source_record_ids": str}).fillna("")
     resolution = pd.read_csv(args.resolution, dtype={"record_id": str}).fillna("")
     registry_input = pd.read_csv(args.faculty_registry).fillna("")
+    override_rows = (
+        pd.read_csv(args.overrides, dtype=str).fillna("").to_dict(orient="records")
+        if args.overrides.exists() else []
+    )
     candidate_lookup = candidates.set_index("record_id", drop=False).to_dict(orient="index")
     resolution_lookup = resolution.set_index("record_id", drop=False).to_dict(orient="index")
 
     # The registry defines who is faculty, independently of publication headings.
     roster: set[str] = set(registry_input["faculty_name"].map(clean_name))
+    roster_years = {
+        clean_name(row["faculty_name"]): set(split_values(row.get("report_years", "")))
+        for row in registry_input.to_dict(orient="records")
+    }
     alias_sets: dict[str, set[str]] = defaultdict(set)
     for row in registry_input.to_dict(orient="records"):
         faculty = clean_name(row["faculty_name"])
         alias_sets[faculty].add(faculty)
+        alias_sets[faculty].update(clean_name(value) for value in split_values(row.get("aliases", "")))
     for alias, faculty in ALIASES.items():
         if faculty in roster:
             alias_sets[faculty].add(clean_name(alias))
@@ -209,10 +282,20 @@ def main() -> None:
     }
     observations: dict[tuple, dict] = {}
     for row in resolution.to_dict(orient="records"):
+        source = candidate_lookup.get(str(row.get("record_id", "")), {})
+        years = {str(source.get("report_year", "")).strip()} - {""}
         for authorship in openalex_authorships(row.get("openalex_authorships", "")):
-            observations[author_key(authorship)] = authorship
-    for authorship in observations.values():
-        scores = lexical_candidates(authorship, alias_sets)
+            observation = observations.setdefault(
+                author_key(authorship), {"authorship": authorship, "report_years": set()}
+            )
+            observation["report_years"].update(years)
+    for observation in observations.values():
+        authorship = observation["authorship"]
+        eligible_aliases = {
+            faculty: aliases for faculty, aliases in alias_sets.items()
+            if faculty_active_in_years(roster_years.get(faculty, set()), observation["report_years"])
+        }
+        scores = lexical_candidates(authorship, eligible_aliases)
         ranked = sorted(((score, faculty) for faculty, score in scores.items() if score >= 0.96), reverse=True)
         if not ranked or (len(ranked) > 1 and ranked[0][0] - ranked[1][0] < 0.015):
             continue
@@ -243,10 +326,31 @@ def main() -> None:
             for authorship in openalex_authorships(row.get("openalex_authorships", "")):
                 article_authorships[author_key(authorship)] = authorship
         publication_id = pub_id(article.get("doi"), article.get("canonical_title"))
-        found: dict[str, dict] = {}
+        source_years = {str(row.get("report_year", "")).strip() for row in source_rows} - {""}
+        article_alias_sets = {
+            faculty: aliases for faculty, aliases in alias_sets.items()
+            if faculty_active_in_years(roster_years.get(faculty, set()), source_years)
+        }
+        article_profiles = {faculty: profiles[faculty] for faculty in article_alias_sets}
+        provisional: dict[str, dict] = {}
+        for source in source_rows:
+            for evidence in institutional_author_evidence(source.get("institutional_author_evidence", "")):
+                faculty = clean_name(evidence.get("faculty_name"))
+                if faculty not in roster:
+                    continue
+                candidate = {
+                    "basis": evidence.get("basis") or "pre_resolution_citation",
+                    "confidence": float(evidence.get("confidence") or 0),
+                    "evidence": json.dumps(evidence, ensure_ascii=False, separators=(",", ":")),
+                }
+                previous = provisional.get(faculty)
+                if previous is None or candidate["confidence"] > previous["confidence"]:
+                    provisional[faculty] = candidate
+
+        openalex_found: dict[str, dict] = {}
 
         for authorship in article_authorships.values():
-            faculty, evidence = resolve_authorship(authorship, alias_sets, profiles)
+            faculty, evidence = resolve_authorship(authorship, article_alias_sets, article_profiles)
             audit_rows.append({
                 "record_id": article["record_id"], "publication_id": publication_id,
                 "canonical_title": article["canonical_title"], "faculty_name": faculty or "",
@@ -257,13 +361,28 @@ def main() -> None:
                 "candidate_faculty": ";".join(evidence.get("candidates", [])),
             })
             if faculty:
-                previous = found.get(faculty)
+                previous = openalex_found.get(faculty)
                 if previous is None or evidence["confidence"] > previous["confidence"]:
-                    found[faculty] = {
+                    openalex_found[faculty] = {
                         "basis": "openalex_author_disambiguation",
                         "confidence": evidence["confidence"],
                         "evidence": json.dumps(evidence, ensure_ascii=False, separators=(",", ":")),
                     }
+
+        found, rejected_owners = merge_attribution_evidence(
+            provisional, openalex_found, bool(article_authorships)
+        )
+        for faculty in rejected_owners:
+            audit_rows.append({
+                "record_id": article["record_id"], "publication_id": publication_id,
+                "canonical_title": article["canonical_title"], "faculty_name": faculty,
+                "status": "provisional_owner_not_confirmed", "openalex_name": "",
+                "openalex_author_id": "", "rule": provisional[faculty]["basis"],
+                "lexical_similarity": "", "shared_institution_ids": "",
+                "candidate_faculty": faculty,
+            })
+
+        found = apply_attribution_overrides(found, override_rows, publication_id, roster)
 
         years = sorted({int(float(row["report_year"])) for row in source_rows if str(row.get("report_year", "")).strip()})
         for faculty, evidence in found.items():
@@ -285,8 +404,13 @@ def main() -> None:
     attributed = attributed.sort_values(["faculty_name", "topic_id", "canonical_title"])
     attributed.to_csv(args.output_dir / "article_faculty_attributions.csv", index=False)
     attributed.to_csv(args.topic_dir / "faculty_topic_publications.csv", index=False)
+    registry_ids = {
+        clean_name(row["faculty_name"]): row.get("faculty_id", "")
+        for row in registry_input.to_dict(orient="records")
+    }
     registry = pd.DataFrame([
-        {"faculty_name": name, "aliases": ";".join(sorted(declared_alias_sets[name], key=str.casefold))}
+        {"faculty_id": registry_ids.get(name, ""), "faculty_name": name,
+         "aliases": ";".join(sorted(declared_alias_sets[name], key=str.casefold))}
         for name in sorted(roster, key=str.casefold)
     ])
     registry.to_csv(args.output_dir / "faculty_registry.csv", index=False)
@@ -333,13 +457,17 @@ def main() -> None:
         "modeled_publications": int(len(articles)), "attributed_publications": int(attributed["record_id"].nunique()),
         "faculty": int(attributed["faculty_name"].nunique()), "attribution_links": int(len(attributed)),
         "basis_counts": dict(Counter(attributed["attribution_basis"])),
-        "attribution_policy": "openalex_author_metadata_only",
+        "attribution_policy": "pre_resolution_citation_then_openalex_enrichment",
         "identity_profiles_with_openalex_ids": sum(bool(profile["author_ids"]) for profile in profiles.values()),
         "identity_profiles_with_institutions": sum(bool(profile["institution_ids"]) for profile in profiles.values()),
         "disambiguation_rule_counts": dict(Counter(
-            json.loads(value)["rule"] for value in attributed["attribution_evidence"]
+            json.loads(value).get("rule") or json.loads(value).get("basis") or "unknown"
+            for value in attributed["attribution_evidence"]
         )),
         "ambiguous_openalex_authorships": sum(row["status"] == "ambiguous" for row in audit_rows),
+        "provisional_owners_not_confirmed": sum(
+            row["status"] == "provisional_owner_not_confirmed" for row in audit_rows
+        ),
     }
     (args.output_dir / "qa.json").write_text(json.dumps(qa, indent=2), encoding="utf-8")
     print(json.dumps(qa, indent=2))

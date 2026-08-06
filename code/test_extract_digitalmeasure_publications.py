@@ -3,7 +3,9 @@ import unittest
 import zipfile
 from pathlib import Path
 
-from extract_digitalmeasure_publications import extract_report, is_ongoing_work, resolution_candidates
+from extract_digitalmeasure_publications import (
+    extract_faculty_owners, extract_report, is_ongoing_work, resolution_candidates,
+)
 
 
 DOCUMENT = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -24,6 +26,8 @@ DOCUMENT = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
     <w:p><w:r><w:t>Scholarly Contributions</w:t></w:r></w:p>
     <w:p><w:r><w:t>Books</w:t></w:r></w:p>
     <w:p><w:r><w:t>Writer, J. R. 2023. “The Example Book.” Sample Press.</w:t></w:r></w:p>
+    <w:p><w:pPr><w:pStyle w:val="ReportHeader"/></w:pPr><w:r><w:t>No Work Faculty</w:t></w:r></w:p>
+    <w:p><w:r><w:t>Teaching</w:t></w:r></w:p>
     <w:sectPr/>
   </w:body>
 </w:document>"""
@@ -42,6 +46,7 @@ class DigitalMeasureExtractorTests(unittest.TestCase):
             with zipfile.ZipFile(path, "w") as archive:
                 archive.writestr("word/document.xml", DOCUMENT)
             rows, summary = extract_report(path)
+            owners = extract_faculty_owners(path)
         self.assertEqual(summary["year"], 2023)
         self.assertEqual(summary["people"], 2)
         self.assertEqual(len(rows), 5)
@@ -57,6 +62,8 @@ class DigitalMeasureExtractorTests(unittest.TestCase):
         self.assertEqual(rows[4]["title"], "The Example Book")
         self.assertEqual(rows[4]["category"], "book")
         self.assertFalse(any("course" in row["raw_citation"].lower() for row in rows))
+        self.assertEqual([owner["faculty_heading"] for owner in owners],
+                         ["Jane Q. Scholar", "John R. Writer", "No Work Faculty"])
         forwarded = resolution_candidates(rows)
         self.assertEqual(
             [row["category"] for row in forwarded],

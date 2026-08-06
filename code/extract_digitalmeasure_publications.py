@@ -23,6 +23,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
+from faculty_name_registry import (
+    FacultyMatcher, annotate_candidate, apply_registry_overrides, build_registry, write_registry,
+)
+
 
 W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
 YEAR_RE = re.compile(r"(?<!\d)((?:19|20)\d{2})(?!\d)")
@@ -266,14 +270,37 @@ def extract_report(path: Path) -> tuple[list[dict], dict]:
     return deduped, summary
 
 
-FIELDS = ["record_id", "report_year", "report_file", "pdf_page", "faculty_heading", "title", "raw_citation", "extraction_method", "confidence", "needs_review", "category", "is_ongoing"]
+def extract_faculty_owners(path: Path) -> list[dict]:
+    """Return every resume owner, including people with no extracted works."""
+    owners, seen = [], set()
+    for block in docx_blocks(path):
+        labelled = NAME_LABEL_RE.match(block.text)
+        if not labelled and not looks_like_name(block.text, block.style, block.bold):
+            continue
+        name = normalize_person_name(labelled.group(1) if labelled else block.text)
+        key = name.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        owners.append({
+            "faculty_heading": name, "report_year": report_year(path), "report_file": path.name,
+        })
+    return owners
 
 
-def append_candidates(rows: list[dict], candidate_path: Path) -> tuple[int, int]:
+FIELDS = [
+    "record_id", "report_year", "report_file", "pdf_page", "faculty_heading", "title",
+    "raw_citation", "extraction_method", "confidence", "needs_review", "category",
+    "is_ongoing", "institutional_faculty_ids", "institutional_faculty_names",
+    "institutional_author_evidence",
+]
+
+
+def append_candidates(rows: list[dict], candidate_path: Path, matcher: FacultyMatcher) -> tuple[int, int]:
     existing: list[dict] = []
     if candidate_path.exists():
         with candidate_path.open(encoding="utf-8", newline="") as handle:
-            existing = list(csv.DictReader(handle))
+            existing = [annotate_candidate(row, matcher) for row in csv.DictReader(handle)]
     ids = {row["record_id"] for row in existing}
     additions = [row for row in rows if row["record_id"] not in ids]
     candidate_path.parent.mkdir(parents=True, exist_ok=True)
@@ -301,17 +328,45 @@ def main() -> None:
     parser.add_argument("--all-records-output", type=Path,
                         default=Path("results/digitalmeasure_extracted_records.csv"),
                         help="Audit CSV containing all extracted categories, including presentations")
+    parser.add_argument("--faculty-registry-output", type=Path,
+                        default=Path("results/institutional_faculty_registry.csv"),
+                        help="Canonical faculty roster seeded by Digital Measures and extended historically")
+    parser.add_argument("--faculty-name-overrides", type=Path,
+                        default=Path("data/faculty_name_overrides.csv"),
+                        help="Reviewed canonical-name overrides applied before citation matching")
     parser.add_argument("--replace-digitalmeasure", action="store_true", help="Remove previously appended Digital Measures rows before appending this run")
     args = parser.parse_args()
     if not args.input_dir.exists():
         raise SystemExit(f"Digital Measures input directory not found: {args.input_dir}")
     paths = sorted([*args.input_dir.glob("*.docx"), *args.input_dir.glob("*.DOCX")])
-    rows, summaries = [], []
+    rows, summaries, owner_records = [], [], []
     for path in paths:
         extracted, summary = extract_report(path)
         rows.extend(extracted)
+        owner_records.extend(extract_faculty_owners(path))
         summaries.append(summary)
         print(f"{path.name}: {summary['status']} ({len(extracted)} candidates)")
+    for owner in owner_records:
+        owner["roster_source"] = "digital_measures"
+    historical_owners = []
+    if args.candidates.exists():
+        with args.candidates.open(encoding="utf-8", newline="") as handle:
+            for candidate in csv.DictReader(handle):
+                if candidate.get("extraction_method", "").startswith("dm_"):
+                    continue
+                historical_owners.append({
+                    "faculty_heading": candidate.get("faculty_heading", ""),
+                    "report_year": candidate.get("report_year", ""),
+                    "report_file": candidate.get("report_file", ""),
+                    "roster_source": "annual_report_heading",
+                })
+    registry = build_registry([*owner_records, *historical_owners])
+    if args.faculty_name_overrides.exists():
+        with args.faculty_name_overrides.open(encoding="utf-8", newline="") as handle:
+            registry = apply_registry_overrides(registry, csv.DictReader(handle))
+    write_registry(args.faculty_registry_output, registry)
+    matcher = FacultyMatcher(registry)
+    rows = [annotate_candidate(row, matcher) for row in rows]
     args.all_records_output.parent.mkdir(parents=True, exist_ok=True)
     with args.all_records_output.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=FIELDS, extrasaction="ignore")
@@ -324,10 +379,11 @@ def main() -> None:
         with args.candidates.open("w", encoding="utf-8", newline="") as handle:
             writer = csv.DictWriter(handle, fieldnames=FIELDS, extrasaction="ignore")
             writer.writeheader(); writer.writerows(retained)
-    added, total = append_candidates(resolution_rows, args.candidates)
+    added, total = append_candidates(resolution_rows, args.candidates, matcher)
     args.summary.parent.mkdir(parents=True, exist_ok=True)
     args.summary.write_text(json.dumps({"reports": summaries, "totals": {
-        "reports": len(paths), "extracted_records": len(rows),
+        "reports": len(paths), "faculty_registry_names": len(registry),
+        "extracted_records": len(rows),
         "resolution_candidates": len(resolution_rows), "added": added,
         "candidate_file_rows": total, "categories": Counter(r["category"] for r in rows),
         "ongoing_records": sum(r["is_ongoing"] for r in rows),

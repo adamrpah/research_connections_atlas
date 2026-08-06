@@ -1,7 +1,7 @@
-feedback_id,publication_id,action,faculty_name,reason
-405da928-950e-4212-8e0b-e5322f4f31b8,pub_5b1c9f142aa15790,remove,Jan Ivery,Report heading drift confirmed by resolved author metadata and submitted feedback
-405da928-950e-4212-8e0b-e5322f4f31b8,pub_5b1c9f142aa15790,add,David M. Iwaniec,Resolved author D. M. Iwaniec and submitted feedback
-3b0b5a2c-8c34-42fb-a399-30681349cf42,pub_28697b3b00fe5202,remove,Jan Ivery,Report heading drift confirmed by resolved author metadata and submitted feedback
-3b0b5a2c-8c34-42fb-a399-30681349cf42,pub_28697b3b00fe5202,add,David M. Iwaniec,Resolved author David M. Iwaniec and submitted feedback
-1f1c38de-c3e4-46e5-8115-034f410687e9,pub_49fa2be1d91bcbe8,remove,Jan Ivery,Report heading drift confirmed by resolved author metadata and submitted feedback
-1f1c38de-c3e4-46e5-8115-034f410687e9,pub_49fa2be1d91bcbe8,add,Scott Jacques,Resolved sole author Scott Jacques and submitted feedback
+feedback_id,decision_id,publication_id,action,faculty_name,reason,reviewer,reviewed_at,source
+405da928-950e-4212-8e0b-e5322f4f31b8,,pub_5b1c9f142aa15790,remove,Jan Ivery,Report heading drift confirmed by resolved author metadata and submitted feedback,,,deployed_feedback
+405da928-950e-4212-8e0b-e5322f4f31b8,,pub_5b1c9f142aa15790,add,David M. Iwaniec,Resolved author D. M. Iwaniec and submitted feedback,,,deployed_feedback
+3b0b5a2c-8c34-42fb-a399-30681349cf42,,pub_28697b3b00fe5202,remove,Jan Ivery,Report heading drift confirmed by resolved author metadata and submitted feedback,,,deployed_feedback
+3b0b5a2c-8c34-42fb-a399-30681349cf42,,pub_28697b3b00fe5202,add,David M. Iwaniec,Resolved author David M. Iwaniec and submitted feedback,,,deployed_feedback
+1f1c38de-c3e4-46e5-8115-034f410687e9,,pub_49fa2be1d91bcbe8,remove,Jan Ivery,Report heading drift confirmed by resolved author metadata and submitted feedback,,,deployed_feedback
+1f1c38de-c3e4-46e5-8115-034f410687e9,,pub_49fa2be1d91bcbe8,add,Scott Jacques,Resolved sole author Scott Jacques and submitted feedback,,,deployed_feedback

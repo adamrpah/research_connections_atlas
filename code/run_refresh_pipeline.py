@@ -26,6 +26,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--skip-clustering", action="store_true", help="Reuse current topic assignments and embeddings")
     parser.add_argument("--skip-feedback-fetch", action="store_true", help="Do not retrieve new submitted attribution feedback")
+    parser.add_argument("--skip-attribution-review-import", action="store_true", help="Do not import the local reviewed attribution workbook")
     parser.add_argument("--skip-app-build", action="store_true", help="Refresh app data without running its production build")
     parser.add_argument("--device", choices=["auto", "cpu", "mps", "cuda"], default="auto")
     args = parser.parse_args()
@@ -35,6 +36,9 @@ def main() -> None:
 
     if not args.skip_feedback_fetch:
         run([python, str(root / "code/fetch_attribution_feedback.py")], "feedback export")
+    review_workbook = root / "data/faculty_attribution_review.xlsx"
+    if review_workbook.exists() and not args.skip_attribution_review_import:
+        run([python, str(root / "code/import_faculty_attribution_review.py")], "faculty attribution review import")
     run([python, str(root / "code/apply_publication_metadata_curation.py")], "human metadata curation")
     if not args.skip_clustering:
         run([python, str(root / "code/cluster_publications.py"), "--device", args.device], "topic clustering")

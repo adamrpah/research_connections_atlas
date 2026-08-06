@@ -31,6 +31,14 @@ retained for audit, and `is_ongoing` flags citations marked as ongoing, on-going
 on going. Presentations and ongoing works are excluded from the Crossref/OpenAlex
 candidate file; publication-ready articles, books, chapters, and other works are
 forwarded for resolution. Reruns are idempotent by record ID.
+The same extraction builds `results/institutional_faculty_registry.csv`, a stable-ID
+roster. Digital Measures resume owners provide the canonical name when available;
+annual-report headings add year-bounded historical-only people. Before any network
+request, every PDF and Digital Measures candidate is annotated with matched
+institutional faculty IDs, names, and JSON evidence. Conservative citation matching
+can identify multiple local coauthors; ambiguous surname-and-initial forms are left
+unmatched. Resume ownership is retained as provisional evidence when the citation
+does not name the owner explicitly.
 Use `--replace-digitalmeasure` after changing extraction logic to replace only prior
 Digital Measures rows while preserving all PDF-derived candidates.
 - `results/extraction_summary.json` - counts, page ranges, and QA statistics
@@ -83,6 +91,11 @@ counts. The image-only 1999 report is excluded by default. Results are written t
 `results/publication_count_reconciliation.csv` and JSON.
 
 ## Stage 2: metadata resolution and open-access PDF retrieval
+
+Faculty attribution begins before this stage. Crossref and OpenAlex metadata enrich
+the provisional local evidence with structured authorships, author IDs, ORCIDs, and
+institutions. For resolved works, an unconfirmed resume-owner link is not treated as
+authorship; explicit citation matches remain auditable alongside external evidence.
 
 Test a small resumable batch:
 
@@ -209,6 +222,32 @@ metadata alone does not remove an attribution. Approved corrections live in
 durable across reruns. Newly submitted complaints are exported to
 `results/feedback/attribution_feedback_review.csv` and marked `needs_review` until
 an approved override is added.
+
+### Faculty-name and attribution review round trip
+
+Generate the review workbook after building the institutional registry and running
+faculty attribution:
+
+```bash
+node code/create_faculty_attribution_review_workbook.mjs
+```
+
+Upload `data/faculty_attribution_review.xlsx` to Google Sheets. Reviewers edit only
+the yellow columns on `Canonical Faculty`, `Attribution Review`, and `Exceptions`.
+Use `clear` to withdraw a previously imported decision for a row.
+Download the reviewed file as `.xlsx` to the same local path, then validate and import:
+
+```bash
+.venv/bin/python code/import_faculty_attribution_review.py --dry-run
+.venv/bin/python code/import_faculty_attribution_review.py
+```
+
+The importer upserts reviewer decisions into the tracked
+`data/faculty_attribution_review_decisions.csv` and derives the tracked name and
+publication-attribution override CSVs. The workbook itself is generated, ignored,
+and never the authoritative record. Population rebuilds apply canonical-name
+overrides before citation matching; analytical refreshes apply reviewed attribution
+adds and removals after local/OpenAlex disambiguation.
 
 Set `FEEDBACK_EXPORT_URL` (or pass `--url` directly to
 `fetch_attribution_feedback.py`) for the deployed college-specific feedback endpoint.
