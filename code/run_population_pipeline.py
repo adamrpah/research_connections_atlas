@@ -77,6 +77,8 @@ def main() -> None:
     parser.add_argument("--pdf-input-dir", type=Path, default=Path("data/Annual-Reports"))
     parser.add_argument("--digitalmeasure-input-dir", type=Path, default=Path("data/DigitalMeasure-Reports"))
     parser.add_argument("--candidates", type=Path, default=Path("results/publication_candidates.csv"))
+    parser.add_argument("--faculty-identifiers", type=Path,
+                        default=Path("data/faculty_identifiers.csv"))
     parser.add_argument("--resolution-dir", type=Path, default=Path("results/publication_resolution"))
     parser.add_argument("--openalex-api-key-file", type=Path)
     parser.add_argument("--limit", type=int, help="Limit records handled in each resolution pass")
@@ -113,6 +115,7 @@ def main() -> None:
             "--all-records-output", str(staging / "digitalmeasure_extracted_records.csv"),
             "--faculty-registry-output", str(staging / "institutional_faculty_registry.csv"),
             "--faculty-name-overrides", str(root / "data/faculty_name_overrides.csv"),
+            "--faculty-identifiers", str(root / args.faculty_identifiers),
         ], "Digital Measures extraction", root)
 
         extracted = read_candidates(staging / "publication_candidates.csv")

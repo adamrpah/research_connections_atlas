@@ -2,7 +2,8 @@ import json
 import unittest
 
 from faculty_name_registry import (
-    annotate_candidate, apply_registry_overrides, build_registry, match_candidate_authors,
+    annotate_candidate, apply_faculty_identifiers, apply_registry_overrides, build_registry,
+    match_candidate_authors, normalize_orcid,
 )
 
 
@@ -40,6 +41,25 @@ class FacultyNameRegistryTests(unittest.TestCase):
         self.assertEqual(updated[0]["faculty_id"], faculty_id)
         self.assertEqual(updated[0]["faculty_name"], "Jane Quinn Scholar")
         self.assertIn("Jane Q. Scholar", updated[0]["aliases"])
+
+    def test_curated_orcid_is_validated_and_attached_by_stable_id(self):
+        updated = apply_faculty_identifiers(self.registry, [{
+            "faculty_id": self.registry[0]["faculty_id"],
+            "faculty_name": "Jane Q. Scholar",
+            "orcid": "https://orcid.org/0000-0002-1825-0097",
+            "source": "faculty_provided", "verified_at": "2026-08-06",
+        }])
+        self.assertEqual(updated[0]["orcid"], "0000-0002-1825-0097")
+        self.assertEqual(updated[0]["orcid_source"], "faculty_provided")
+        with self.assertRaisesRegex(ValueError, "checksum"):
+            normalize_orcid("0000-0002-1825-0098")
+
+    def test_rejects_duplicate_orcid_assignments(self):
+        with self.assertRaisesRegex(ValueError, "multiple faculty IDs"):
+            apply_faculty_identifiers(self.registry, [
+                {"faculty_id": row["faculty_id"], "orcid": "0000-0002-1825-0097"}
+                for row in self.registry
+            ])
 
     def test_matches_owner_and_peer_coauthor_before_resolution(self):
         candidate = {

@@ -249,6 +249,22 @@ and never the authoritative record. Population rebuilds apply canonical-name
 overrides before citation matching; analytical refreshes apply reviewed attribution
 adds and removals after local/OpenAlex disambiguation.
 
+### Curated faculty identifiers
+
+Add faculty-provided or otherwise verified ORCIDs to `data/faculty_identifiers.csv`.
+Join each identifier to the stable `faculty_id`; `faculty_name` is a human-readable
+cross-check rather than the key. ORCIDs are normalized and checksum-validated, then
+carried into the generated institutional registry and review workbook. An exact ORCID
+on an OpenAlex authorship is treated as strong identity evidence, but the identifier
+does not independently add unrelated publications to the corpus. Conflicting external
+ORCIDs are retained in the author identity profile and flagged rather than replacing
+the curated value.
+
+```csv
+faculty_id,faculty_name,orcid,source,verified_at,notes
+fac_example1234567,Jane Q. Scholar,0000-0002-1825-0097,faculty_provided,2026-08-06,
+```
+
 Set `FEEDBACK_EXPORT_URL` (or pass `--url` directly to
 `fetch_attribution_feedback.py`) for the deployed college-specific feedback endpoint.
 The default source code intentionally contains no personal deployment URL.

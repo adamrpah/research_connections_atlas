@@ -2,6 +2,7 @@ import unittest
 
 from resolve_faculty_attributions import (
     apply_attribution_overrides, faculty_active_in_years, merge_attribution_evidence,
+    resolve_authorship,
 )
 
 
@@ -44,6 +45,39 @@ class AttributionEvidenceTests(unittest.TestCase):
         merged, rejected = merge_attribution_evidence(provisional, {}, False)
         self.assertEqual(set(merged), {"Jane Scholar"})
         self.assertEqual(rejected, [])
+
+    def test_curated_orcid_strongly_identifies_openalex_author(self):
+        profiles = {
+            "Jane Scholar": {
+                "gold_orcid": "0000-0002-1825-0097", "author_ids": set(),
+                "institution_ids": set(),
+            },
+            "John Writer": {
+                "gold_orcid": "", "author_ids": set(), "institution_ids": set(),
+            },
+        }
+        faculty, evidence = resolve_authorship(
+            {"display_name": "J. Q. Scholar", "orcid": "https://orcid.org/0000-0002-1825-0097"},
+            {"Jane Scholar": {"Jane Scholar"}, "John Writer": {"John Writer"}},
+            profiles,
+        )
+        self.assertEqual(faculty, "Jane Scholar")
+        self.assertEqual(evidence["rule"], "curated_orcid")
+        self.assertEqual(evidence["confidence"], 0.999)
+
+    def test_conflicting_external_orcid_does_not_override_curated_identity(self):
+        profiles = {
+            "Jane Scholar": {
+                "gold_orcid": "0000-0002-1825-0097", "author_ids": set(),
+                "institution_ids": set(),
+            },
+        }
+        faculty, evidence = resolve_authorship(
+            {"display_name": "Jane Scholar", "orcid": "0000-0001-5109-3700"},
+            {"Jane Scholar": {"Jane Scholar"}}, profiles,
+        )
+        self.assertIsNone(faculty)
+        self.assertEqual(evidence["status"], "unmatched")
 
 
 if __name__ == "__main__":

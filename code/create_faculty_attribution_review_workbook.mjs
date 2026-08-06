@@ -52,11 +52,13 @@ const exceptions = audit.filter((row) => ["ambiguous", "provisional_owner_not_co
 const canonicalHeaders = [
   "review_action", "canonical_name_override", "alias_to_add", "reviewer", "reviewed_at",
   "reviewer_notes", "faculty_id", "faculty_name", "aliases", "report_years",
-  "canonical_authority", "source_types", "source_occurrences",
+  "canonical_authority", "source_types", "source_occurrences", "orcid", "orcid_source",
+  "orcid_verified_at",
 ];
 const canonicalRows = registry.map((row) => [
   "", "", "", "", "", "", row.faculty_id, row.faculty_name, row.aliases, row.report_years,
-  row.canonical_authority, row.source_types, Number(row.source_occurrences || 0),
+  row.canonical_authority, row.source_types, Number(row.source_occurrences || 0), row.orcid,
+  row.orcid_source, row.orcid_verified_at,
 ].map(literal));
 
 const attributionHeaders = [
@@ -133,13 +135,13 @@ function buildReviewSheet(sheet, headers, rows, tableName, actions, widths) {
   sheet.tables.add(`A1:${String.fromCharCode(64 + headers.length)}${rows.length + 1}`, true, tableName);
 }
 
-buildReviewSheet(canonical, canonicalHeaders, canonicalRows, "CanonicalFacultyReview", ["approve", "rename", "add_alias", "exclude", "clear"], [18, 28, 28, 18, 14, 40, 24, 28, 38, 18, 22, 24, 16]);
+buildReviewSheet(canonical, canonicalHeaders, canonicalRows, "CanonicalFacultyReview", ["approve", "rename", "add_alias", "exclude", "clear"], [18, 28, 28, 18, 14, 40, 24, 28, 38, 18, 22, 24, 16, 22, 20, 18]);
 buildReviewSheet(attribution, attributionHeaders, attributionRows, "AttributionReview", ["approve", "remove", "replace", "clear"], [18, 28, 18, 14, 40, 24, 52, 28, 30, 16, 18, 24]);
 buildReviewSheet(exceptionSheet, exceptionHeaders, exceptionRows, "AttributionExceptions", ["approve_add", "reject", "replace", "clear"], [18, 28, 18, 14, 40, 24, 52, 28, 30, 28, 36]);
 
 const check = await workbook.inspect({
-  kind: "table", range: "Canonical Faculty!A1:M6", include: "values,formulas",
-  tableMaxRows: 6, tableMaxCols: 13,
+  kind: "table", range: "Canonical Faculty!A1:P6", include: "values,formulas",
+  tableMaxRows: 6, tableMaxCols: 16,
 });
 console.log(check.ndjson);
 const errors = await workbook.inspect({
@@ -154,7 +156,7 @@ await output.save(outputPath);
 await fs.mkdir(previewDir, { recursive: true });
 for (const [sheetName, range, fileName] of [
   ["Instructions", "A1:H13", "instructions.png"],
-  ["Canonical Faculty", "A1:M7", "canonical.png"],
+  ["Canonical Faculty", "A1:P7", "canonical.png"],
   ["Attribution Review", "A1:L7", "attribution.png"],
   ["Exceptions", "A1:K7", "exceptions.png"],
 ]) {

@@ -20,6 +20,7 @@ from typing import Iterable
 
 
 YEAR_RE = re.compile(r"(?<!\d)(?:19|20)\d{2}(?!\d)")
+ORCID_RE = re.compile(r"^(?:https?://orcid\.org/)?(\d{4}-\d{4}-\d{4}-\d{3}[\dX])$", re.I)
 NON_PERSON_NAME_KEYS = {
     "refereed journal articles", "journal articles", "book chapters", "books",
     "graduate student", "former graduate student", "publications", "presentations",
@@ -90,7 +91,54 @@ def build_registry(records: Iterable[dict]) -> list[dict]:
 REGISTRY_FIELDS = [
     "faculty_id", "faculty_name", "name_key", "aliases", "report_years",
     "source_reports", "source_types", "canonical_authority", "source_occurrences",
+    "orcid", "orcid_source", "orcid_verified_at",
 ]
+
+
+def normalize_orcid(value: object) -> str:
+    """Return a canonical, checksum-valid ORCID or raise ValueError."""
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    match = ORCID_RE.fullmatch(raw)
+    if not match:
+        raise ValueError(f"Invalid ORCID format: {raw}")
+    canonical = match.group(1).upper()
+    total = 0
+    for character in canonical.replace("-", "")[:-1]:
+        total = (total + int(character)) * 2
+    result = (12 - total % 11) % 11
+    check = "X" if result == 10 else str(result)
+    if canonical[-1] != check:
+        raise ValueError(f"Invalid ORCID checksum: {raw}")
+    return canonical
+
+
+def apply_faculty_identifiers(registry: list[dict], identifiers: Iterable[dict]) -> list[dict]:
+    """Attach curated identity identifiers without changing roster membership."""
+    by_id = {row["faculty_id"]: dict(row) for row in registry}
+    seen_orcids: dict[str, str] = {}
+    for identifier in identifiers:
+        faculty_id_value = str(identifier.get("faculty_id", "")).strip()
+        if faculty_id_value not in by_id:
+            raise ValueError(f"Faculty identifier references unknown ID: {faculty_id_value}")
+        orcid = normalize_orcid(identifier.get("orcid"))
+        if not orcid:
+            continue
+        previous = seen_orcids.get(orcid)
+        if previous and previous != faculty_id_value:
+            raise ValueError(f"ORCID {orcid} is assigned to multiple faculty IDs")
+        seen_orcids[orcid] = faculty_id_value
+        row = by_id[faculty_id_value]
+        supplied_name = clean_name(identifier.get("faculty_name"))
+        if supplied_name and supplied_name not in aliases_for(row):
+            raise ValueError(
+                f"Faculty identifier name does not match {faculty_id_value}: {supplied_name}"
+            )
+        row["orcid"] = orcid
+        row["orcid_source"] = str(identifier.get("source", "")).strip() or "curated"
+        row["orcid_verified_at"] = str(identifier.get("verified_at", "")).strip()
+    return sorted(by_id.values(), key=lambda row: row["faculty_name"].casefold())
 
 
 def write_registry(path: Path, rows: list[dict]) -> None:

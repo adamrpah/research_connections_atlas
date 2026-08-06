@@ -24,7 +24,8 @@ from pathlib import Path
 from xml.etree import ElementTree as ET
 
 from faculty_name_registry import (
-    FacultyMatcher, annotate_candidate, apply_registry_overrides, build_registry, write_registry,
+    FacultyMatcher, annotate_candidate, apply_faculty_identifiers, apply_registry_overrides,
+    build_registry, write_registry,
 )
 
 
@@ -334,6 +335,9 @@ def main() -> None:
     parser.add_argument("--faculty-name-overrides", type=Path,
                         default=Path("data/faculty_name_overrides.csv"),
                         help="Reviewed canonical-name overrides applied before citation matching")
+    parser.add_argument("--faculty-identifiers", type=Path,
+                        default=Path("data/faculty_identifiers.csv"),
+                        help="Curated faculty identifiers, including gold-standard ORCIDs")
     parser.add_argument("--replace-digitalmeasure", action="store_true", help="Remove previously appended Digital Measures rows before appending this run")
     args = parser.parse_args()
     if not args.input_dir.exists():
@@ -364,6 +368,9 @@ def main() -> None:
     if args.faculty_name_overrides.exists():
         with args.faculty_name_overrides.open(encoding="utf-8", newline="") as handle:
             registry = apply_registry_overrides(registry, csv.DictReader(handle))
+    if args.faculty_identifiers.exists():
+        with args.faculty_identifiers.open(encoding="utf-8", newline="") as handle:
+            registry = apply_faculty_identifiers(registry, csv.DictReader(handle))
     write_registry(args.faculty_registry_output, registry)
     matcher = FacultyMatcher(registry)
     rows = [annotate_candidate(row, matcher) for row in rows]

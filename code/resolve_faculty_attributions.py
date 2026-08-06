@@ -20,6 +20,7 @@ from typing import Any
 
 import pandas as pd
 
+from faculty_name_registry import normalize_orcid
 from label_and_propagate_topics import ALIASES
 
 
@@ -45,6 +46,14 @@ def pub_id(doi: Any, title: Any) -> str:
 
 def split_values(value: Any) -> list[str]:
     return [part.strip() for part in str(value or "").split(";") if part.strip()]
+
+
+def external_orcid(value: Any) -> str:
+    """Normalize external ORCID data without letting malformed API data stop a run."""
+    try:
+        return normalize_orcid(value)
+    except ValueError:
+        return ""
 
 
 def openalex_authorships(value: Any) -> list[dict]:
@@ -141,13 +150,20 @@ def resolve_authorship(authorship: dict, alias_sets: dict[str, set[str]], profil
     name = clean_name(authorship.get("display_name") or authorship.get("raw_author_name"))
     author_id = str(authorship.get("author_id") or "")
     institutions = institution_ids(authorship)
+    authorship_orcid = external_orcid(authorship.get("orcid"))
     lexical = lexical_candidates(authorship, alias_sets)
     candidates = []
     for faculty, score in lexical.items():
+        gold_orcid = profiles[faculty].get("gold_orcid", "")
+        if authorship_orcid and gold_orcid and authorship_orcid != gold_orcid:
+            continue
+        orcid_match = bool(authorship_orcid and authorship_orcid == gold_orcid)
         id_match = bool(author_id and author_id in profiles[faculty]["author_ids"])
         shared_institutions = sorted(institutions & profiles[faculty]["institution_ids"])
         rule, confidence = "", 0.0
-        if score >= 0.96 and id_match and shared_institutions:
+        if orcid_match:
+            rule, confidence = "curated_orcid", 0.999
+        elif score >= 0.96 and id_match and shared_institutions:
             rule, confidence = "name+openalex_id+institution", 0.995
         elif score >= 0.96 and id_match:
             rule, confidence = "name+openalex_id", 0.99
@@ -277,9 +293,12 @@ def main() -> None:
     # extremely close lexical matches to the bounded faculty roster.
     profiles = {
         faculty: {"author_ids": set(), "orcids": set(), "institution_ids": set(),
-                  "institution_names": set(), "observed_names": set()}
+                  "institution_names": set(), "observed_names": set(), "gold_orcid": ""}
         for faculty in roster
     }
+    for row in registry_input.to_dict(orient="records"):
+        faculty = clean_name(row["faculty_name"])
+        profiles[faculty]["gold_orcid"] = normalize_orcid(row.get("orcid")) if row.get("orcid") else ""
     observations: dict[tuple, dict] = {}
     for row in resolution.to_dict(orient="records"):
         source = candidate_lookup.get(str(row.get("record_id", "")), {})
@@ -307,8 +326,8 @@ def main() -> None:
             alias_sets[faculty].add(name)
         if authorship.get("author_id"):
             profile["author_ids"].add(str(authorship["author_id"]))
-        if authorship.get("orcid"):
-            profile["orcids"].add(str(authorship["orcid"]))
+        if external_orcid(authorship.get("orcid")):
+            profile["orcids"].add(external_orcid(authorship["orcid"]))
         profile["institution_ids"].update(institution_ids(authorship))
         profile["institution_names"].update(
             str(item.get("display_name") or "") for item in authorship.get("institutions") or []
@@ -408,9 +427,15 @@ def main() -> None:
         clean_name(row["faculty_name"]): row.get("faculty_id", "")
         for row in registry_input.to_dict(orient="records")
     }
+    registry_rows = {
+        clean_name(row["faculty_name"]): row for row in registry_input.to_dict(orient="records")
+    }
     registry = pd.DataFrame([
         {"faculty_id": registry_ids.get(name, ""), "faculty_name": name,
-         "aliases": ";".join(sorted(declared_alias_sets[name], key=str.casefold))}
+         "aliases": ";".join(sorted(declared_alias_sets[name], key=str.casefold)),
+         "orcid": registry_rows[name].get("orcid", ""),
+         "orcid_source": registry_rows[name].get("orcid_source", ""),
+         "orcid_verified_at": registry_rows[name].get("orcid_verified_at", "")}
         for name in sorted(roster, key=str.casefold)
     ])
     registry.to_csv(args.output_dir / "faculty_registry.csv", index=False)
@@ -420,8 +445,13 @@ def main() -> None:
         profile = profiles[faculty]
         profile_rows.append({
             "faculty_name": faculty,
+            "curated_orcid": profile["gold_orcid"],
             "openalex_author_ids": ";".join(sorted(profile["author_ids"])),
-            "orcids": ";".join(sorted(profile["orcids"])),
+            "external_orcids": ";".join(sorted(profile["orcids"])),
+            "orcid_conflict": bool(
+                profile["gold_orcid"] and profile["orcids"]
+                and any(value != profile["gold_orcid"] for value in profile["orcids"])
+            ),
             "observed_names": ";".join(sorted(profile["observed_names"], key=str.casefold)),
             "institution_ids": ";".join(sorted(profile["institution_ids"])),
             "institution_names": ";".join(sorted(profile["institution_names"], key=str.casefold)),
