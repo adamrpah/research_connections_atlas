@@ -24,7 +24,13 @@ python3 code/extract_digitalmeasure_publications.py
 The report year is read from each `.docx` filename. The extractor tracks the current
 faculty/staff name and publication subsection, preserves the complete citation and
 faculty attribution as provenance, and writes a separate audit summary to
-`results/digitalmeasure_extraction_summary.json`. Reruns are idempotent by record ID.
+`results/digitalmeasure_extraction_summary.json`. It also writes
+`results/digitalmeasure_extracted_records.csv`, whose `category` column contains
+`article`, `book`, `book_chapter`, `presentation`, or `other`. Every category is
+retained for audit, and `is_ongoing` flags citations marked as ongoing, on-going, or
+on going. Presentations and ongoing works are excluded from the Crossref/OpenAlex
+candidate file; publication-ready articles, books, chapters, and other works are
+forwarded for resolution. Reruns are idempotent by record ID.
 Use `--replace-digitalmeasure` after changing extraction logic to replace only prior
 Digital Measures rows while preserving all PDF-derived candidates.
 - `results/extraction_summary.json` - counts, page ranges, and QA statistics

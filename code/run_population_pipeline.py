@@ -24,7 +24,8 @@ from pathlib import Path
 
 FIELDS = [
     "record_id", "report_year", "report_file", "pdf_page", "faculty_heading",
-    "title", "raw_citation", "extraction_method", "confidence", "needs_review",
+    "title", "raw_citation", "extraction_method", "confidence", "needs_review", "category",
+    "is_ongoing",
 ]
 
 
@@ -108,6 +109,7 @@ def main() -> None:
             "--input-dir", str(root / args.digitalmeasure_input_dir),
             "--candidates", str(staging / "publication_candidates.csv"),
             "--summary", str(staging / "digitalmeasure_extraction_summary.json"),
+            "--all-records-output", str(staging / "digitalmeasure_extracted_records.csv"),
         ], "Digital Measures extraction", root)
 
         extracted = read_candidates(staging / "publication_candidates.csv")
@@ -132,6 +134,10 @@ def main() -> None:
         shutil.copy2(
             staging / "digitalmeasure_extraction_summary.json",
             results / "digitalmeasure_extraction_summary.json",
+        )
+        shutil.copy2(
+            staging / "digitalmeasure_extracted_records.csv",
+            results / "digitalmeasure_extracted_records.csv",
         )
         (results / "population_pipeline_summary.json").write_text(
             json.dumps(status, indent=2) + "\n", encoding="utf-8"

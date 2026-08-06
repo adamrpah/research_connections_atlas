@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
-"""Extract faculty publications from Digital Measures CV-style DOCX reports.
+"""Extract faculty works from Digital Measures CV-style DOCX reports.
 
 The parser uses only the Python standard library.  It reads WordprocessingML in
 document order (paragraphs and table cells), tracks the current person's resume,
-and emits the same provenance-rich rows consumed by the OpenAlex resolver.
+and emits an audit dataset containing articles, books, chapters, presentations,
+and other listed works. Publication-ready articles, books, chapters, and other
+works are appended to the candidate dataset consumed by the metadata resolver.
+Presentations and works marked as ongoing remain visible in the audit dataset
+but are not sent to Crossref or OpenAlex.
 """
 
 from __future__ import annotations
@@ -33,6 +37,7 @@ PUBLICATION_TYPE_RE = re.compile(
     r"encyclopedia entries|case studies|reviews?|technical reports?|working papers?|"
     r"conference proceedings|periodicals|other(?: publications?)?)\s*:?$", re.I
 )
+PRESENTATION_SECTION_RE = re.compile(r"^(?:conference\s+)?presentations?\s*:?$", re.I)
 STOP_SECTION_RE = re.compile(
     r"^(?:education|academic background|employment|professional positions?|teaching|"
     r"courses taught|grants?|contracts?|presentations?|conference presentations?|"
@@ -44,6 +49,8 @@ NAME_LABEL_RE = re.compile(r"^(?:name|faculty(?:/staff)? member|individual)\s*:\
 STATUS_RE = re.compile(r"\b(?:published|accepted|forthcoming|in press|under contract)\b", re.I)
 DOI_RE = re.compile(r"\b10\.\d{4,9}/\S+", re.I)
 QUOTED_RE = re.compile(r"[\u201c\"]([^\u201d\"]{5,350})[\u201d\"]")
+ONGOING_RE = re.compile(r"\bon[\s-]?going\b", re.I)
+RESOLVABLE_CATEGORIES = {"article", "book", "book_chapter", "other"}
 
 
 @dataclass
@@ -132,6 +139,30 @@ def normalize_person_name(value: str) -> str:
     return re.sub(r"^(?:dr\.?|prof(?:essor)?\.?)\s+", "", value, flags=re.I)
 
 
+def normalize_category(heading: str) -> str:
+    """Map Digital Measures publication headings to a stable audit category."""
+    value = normalize(heading).rstrip(":").casefold()
+    if value in {"journal article", "journal articles", "refereed journal article",
+                 "refereed journal articles", "periodical", "periodicals"}:
+        return "article"
+    if value in {"book", "books", "monograph", "monographs"}:
+        return "book"
+    if value in {"book chapter", "book chapters", "chapter", "chapters",
+                 "encyclopedia entry", "encyclopedia entries"}:
+        return "book_chapter"
+    return "other"
+
+
+def is_ongoing_work(text: str) -> bool:
+    """Return whether a citation explicitly labels the work as ongoing."""
+    return bool(ONGOING_RE.search(text))
+
+
+def is_major_heading(block: Block) -> bool:
+    text = block.text.rstrip(":").strip()
+    return block.style == "Heading2" or (block.bold and text.isupper())
+
+
 def is_citation(text: str, report_year_value: int | None) -> bool:
     if len(text) < 18 or PUBLICATION_TYPE_RE.match(text) or PUBLICATION_SECTION_RE.match(text):
         return False
@@ -169,8 +200,8 @@ def extract_report(path: Path) -> tuple[list[dict], dict]:
     year = report_year(path)
     blocks = docx_blocks(path)
     faculty = ""
-    in_publications = False
-    publication_type = ""
+    section = ""
+    category = ""
     rows: list[dict] = []
     for block in blocks:
         text = block.text
@@ -178,19 +209,28 @@ def extract_report(path: Path) -> tuple[list[dict], dict]:
         if labelled or looks_like_name(text, block.style, block.bold):
             candidate = normalize_person_name(labelled.group(1) if labelled else text)
             # A name inside a citation should never reset the resume owner.
-            if not in_publications or not is_citation(text, year):
-                faculty, in_publications, publication_type = candidate, False, ""
+            if not section or not is_citation(text, year):
+                faculty, section, category = candidate, "", ""
                 continue
         if PUBLICATION_SECTION_RE.match(text):
-            in_publications, publication_type = True, ""
+            section, category = "publications", ""
             continue
-        if in_publications and PUBLICATION_TYPE_RE.match(text):
-            publication_type = text.rstrip(":")
+        if PRESENTATION_SECTION_RE.match(text):
+            section, category = "presentations", "presentation"
             continue
-        if in_publications and STOP_SECTION_RE.match(text):
-            in_publications, publication_type = False, ""
+        if section == "publications" and PUBLICATION_TYPE_RE.match(text):
+            category = normalize_category(text)
             continue
-        if not in_publications or not faculty or not is_citation(text, year):
+        if section == "presentations" and (block.style == "Heading3" or block.bold) and not is_major_heading(block):
+            continue
+        # Preserve the legacy publication boundary behavior so existing article
+        # extraction is byte-for-byte stable. Presentation sections need the broader
+        # major-heading stop because their subtype headings are less standardized.
+        if ((section == "publications" and STOP_SECTION_RE.match(text))
+                or (section == "presentations" and (STOP_SECTION_RE.match(text) or is_major_heading(block)))):
+            section, category = "", ""
+            continue
+        if not section or not faculty or not is_citation(text, year):
             continue
         title, method, confidence = citation_title(text)
         if not title:
@@ -201,10 +241,15 @@ def extract_report(path: Path) -> tuple[list[dict], dict]:
             "pdf_page": "", "faculty_heading": faculty, "title": title,
             "raw_citation": text, "extraction_method": method,
             "confidence": f"{confidence:.2f}", "needs_review": confidence < 0.75,
+            "category": category or ("presentation" if section == "presentations" else "other"),
+            "is_ongoing": is_ongoing_work(text),
         })
     deduped, seen = [], set()
     for row in rows:
-        key = (row["faculty_heading"].casefold(), re.sub(r"[^a-z0-9]+", " ", row["title"].casefold()).strip())
+        # Keep the legacy key: changing deduplication here would silently add article
+        # records when the same title also appears under another category.
+        key = (row["faculty_heading"].casefold(),
+               re.sub(r"[^a-z0-9]+", " ", row["title"].casefold()).strip())
         if key in seen:
             continue
         seen.add(key)
@@ -212,13 +257,16 @@ def extract_report(path: Path) -> tuple[list[dict], dict]:
     summary = {
         "report": path.name, "year": year, "blocks": len(blocks), "people": len({r['faculty_heading'] for r in deduped}),
         "candidate_citations": len(deduped), "titles_extracted": len(deduped),
+        "categories": Counter(row["category"] for row in deduped),
+        "ongoing_records": sum(row["is_ongoing"] for row in deduped),
+        "resolution_candidates": len(resolution_candidates(deduped)),
         "needs_review": sum(r["needs_review"] for r in deduped),
         "status": "ok" if year is not None else "year_not_found",
     }
     return deduped, summary
 
 
-FIELDS = ["record_id", "report_year", "report_file", "pdf_page", "faculty_heading", "title", "raw_citation", "extraction_method", "confidence", "needs_review"]
+FIELDS = ["record_id", "report_year", "report_file", "pdf_page", "faculty_heading", "title", "raw_citation", "extraction_method", "confidence", "needs_review", "category", "is_ongoing"]
 
 
 def append_candidates(rows: list[dict], candidate_path: Path) -> tuple[int, int]:
@@ -236,11 +284,23 @@ def append_candidates(rows: list[dict], candidate_path: Path) -> tuple[int, int]
     return len(additions), len(existing) + len(additions)
 
 
+def resolution_candidates(rows: list[dict]) -> list[dict]:
+    """Return publication-ready works eligible for external metadata resolution."""
+    return [
+        row for row in rows
+        if row.get("category") in RESOLVABLE_CATEGORIES
+        and str(row.get("is_ongoing", "")).casefold() not in {"true", "1", "yes"}
+    ]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input-dir", type=Path, default=Path("data/DigitalMeasure-Reports"))
     parser.add_argument("--candidates", type=Path, default=Path("results/publication_candidates.csv"))
     parser.add_argument("--summary", type=Path, default=Path("results/digitalmeasure_extraction_summary.json"))
+    parser.add_argument("--all-records-output", type=Path,
+                        default=Path("results/digitalmeasure_extracted_records.csv"),
+                        help="Audit CSV containing all extracted categories, including presentations")
     parser.add_argument("--replace-digitalmeasure", action="store_true", help="Remove previously appended Digital Measures rows before appending this run")
     args = parser.parse_args()
     if not args.input_dir.exists():
@@ -252,16 +312,29 @@ def main() -> None:
         rows.extend(extracted)
         summaries.append(summary)
         print(f"{path.name}: {summary['status']} ({len(extracted)} candidates)")
+    args.all_records_output.parent.mkdir(parents=True, exist_ok=True)
+    with args.all_records_output.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=FIELDS, extrasaction="ignore")
+        writer.writeheader()
+        writer.writerows(rows)
+    resolution_rows = resolution_candidates(rows)
     if args.replace_digitalmeasure and args.candidates.exists():
         with args.candidates.open(encoding="utf-8", newline="") as handle:
             retained = [row for row in csv.DictReader(handle) if not row.get("extraction_method", "").startswith("dm_")]
         with args.candidates.open("w", encoding="utf-8", newline="") as handle:
             writer = csv.DictWriter(handle, fieldnames=FIELDS, extrasaction="ignore")
             writer.writeheader(); writer.writerows(retained)
-    added, total = append_candidates(rows, args.candidates)
+    added, total = append_candidates(resolution_rows, args.candidates)
     args.summary.parent.mkdir(parents=True, exist_ok=True)
-    args.summary.write_text(json.dumps({"reports": summaries, "totals": {"reports": len(paths), "candidates": len(rows), "added": added, "candidate_file_rows": total, "methods": Counter(r["extraction_method"] for r in rows)}}, indent=2, ensure_ascii=False, default=dict) + "\n", encoding="utf-8")
-    print(f"Appended {added} new candidates; {args.candidates} now has {total} rows")
+    args.summary.write_text(json.dumps({"reports": summaries, "totals": {
+        "reports": len(paths), "extracted_records": len(rows),
+        "resolution_candidates": len(resolution_rows), "added": added,
+        "candidate_file_rows": total, "categories": Counter(r["category"] for r in rows),
+        "ongoing_records": sum(r["is_ongoing"] for r in rows),
+        "methods": Counter(r["extraction_method"] for r in rows),
+    }}, indent=2, ensure_ascii=False, default=dict) + "\n", encoding="utf-8")
+    print(f"Wrote {len(rows)} audit records and appended {added} resolution candidates; "
+          f"{args.candidates} now has {total} rows")
 
 
 if __name__ == "__main__":
