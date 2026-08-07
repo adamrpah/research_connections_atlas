@@ -19,16 +19,33 @@ def main() -> None:
         default=os.environ.get("FEEDBACK_EXPORT_URL"),
         help="Attribution-feedback export URL (or set FEEDBACK_EXPORT_URL)",
     )
+    parser.add_argument(
+        "--url-file",
+        type=Path,
+        default=Path(".secrets/feedback_export_url"),
+        help="Local URL file used when --url and FEEDBACK_EXPORT_URL are unset",
+    )
     parser.add_argument("--key-file", type=Path, default=Path(".secrets/feedback_admin_key"))
     parser.add_argument("--output-dir", type=Path, default=Path("results/feedback"))
     parser.add_argument("--overrides", type=Path, default=Path("data/faculty_attribution_overrides.csv"))
     args = parser.parse_args()
+    if not args.url and args.url_file.exists():
+        args.url = args.url_file.read_text(encoding="utf-8").strip()
     if not args.url:
-        raise SystemExit("Feedback export URL required: pass --url or set FEEDBACK_EXPORT_URL")
+        raise SystemExit(
+            "Feedback export URL required: pass --url, set FEEDBACK_EXPORT_URL, "
+            f"or create {args.url_file}"
+        )
     key = args.key_file.read_text(encoding="utf-8").strip()
     if not key:
         raise SystemExit(f"Empty feedback administrator key: {args.key_file}")
-    request = urllib.request.Request(args.url, headers={"Authorization": f"Bearer {key}"})
+    request = urllib.request.Request(
+        args.url,
+        headers={
+            "Authorization": f"Bearer {key}",
+            "User-Agent": "research-connections-atlas-feedback-export/1.0",
+        },
+    )
     with urllib.request.urlopen(request, timeout=30) as response:
         payload = json.load(response)
     args.output_dir.mkdir(parents=True, exist_ok=True)
