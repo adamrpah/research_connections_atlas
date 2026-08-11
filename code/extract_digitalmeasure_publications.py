@@ -51,10 +51,17 @@ STOP_SECTION_RE = re.compile(
     r"administrative assignments?|faculty development)\s*:?$", re.I
 )
 NAME_LABEL_RE = re.compile(r"^(?:name|faculty(?:/staff)? member|individual)\s*:\s*(.+)$", re.I)
-STATUS_RE = re.compile(r"\b(?:published|accepted|forthcoming|in press|under contract)\b", re.I)
+STATUS_RE = re.compile(
+    r"\b(?:published|accepted|forthcoming|in press|under contract|submitted|"
+    r"working paper|reviewed\s*-\s*not accepted)\b",
+    re.I,
+)
 DOI_RE = re.compile(r"\b10\.\d{4,9}/\S+", re.I)
 QUOTED_RE = re.compile(r"[\u201c\"]([^\u201d\"]{5,350})[\u201d\"]")
-ONGOING_RE = re.compile(r"\bon[\s-]?going\b", re.I)
+ONGOING_RE = re.compile(
+    r"\b(?:on[\s-]?going|submitted|working paper|reviewed\s*-\s*not accepted)\b",
+    re.I,
+)
 RESOLVABLE_CATEGORIES = {"article", "book", "book_chapter", "other"}
 
 
@@ -75,6 +82,14 @@ def normalize(text: str) -> str:
 def report_year(path: Path) -> int | None:
     years = YEAR_RE.findall(path.stem)
     return int(years[0]) if years else None
+
+
+def report_paths(input_dir: Path) -> list[Path]:
+    """Return real DOCX exports, excluding transient Microsoft Office lock files."""
+    return sorted(
+        path for path in [*input_dir.glob("*.docx"), *input_dir.glob("*.DOCX")]
+        if not path.name.startswith("~$")
+    )
 
 
 def _text(element: ET.Element) -> str:
@@ -159,8 +174,20 @@ def normalize_category(heading: str) -> str:
 
 
 def is_ongoing_work(text: str) -> bool:
-    """Return whether a citation explicitly labels the work as ongoing."""
+    """Return whether a record is explicitly not yet a completed publication."""
     return bool(ONGOING_RE.search(text))
+
+
+def citation_category(section_category: str, citation: str) -> str:
+    """Refine generic Digital Measures headings using explicit record status.
+
+    Digital Measures sometimes places submitted articles and working papers under
+    ``Other`` even though they are article-like scholarly works. Keep completed
+    records under that heading as ``other`` unless the export is more specific.
+    """
+    if section_category == "other" and is_ongoing_work(citation):
+        return "article"
+    return section_category
 
 
 def is_major_heading(block: Block) -> bool:
@@ -181,20 +208,12 @@ def is_citation(text: str, report_year_value: int | None) -> bool:
 
 
 def citation_title(citation: str) -> tuple[str, str, float]:
-    quoted = QUOTED_RE.search(citation)
-    if quoted:
-        return normalize(quoted.group(1)).strip(" .,"), "dm_quoted_title", 0.97
-    # APA: author(s). (2024). Title. Venue; also supports 2024. Title. Venue.
-    apa = re.search(
-        r"(?:\((?:19|20)\d{2}[a-z]?\)|(?<!\d)(?:19|20)\d{2}[a-z]?(?!\d))\s*[.):,]?\s*"
-        r"(.+?)(?=\.\s+(?:[A-Z]|$)|$)", citation
-    )
-    if apa:
-        title = normalize(apa.group(1)).strip(" .,")
-        if 5 <= len(title) <= 350:
-            return title, "dm_apa_title", 0.88
-    # Digital Measures exports often put the work title in italics. Formatting is
-    # not reliable enough across reports, so retain the citation as a search query.
+    """Preserve the complete Digital Measures citation as the resolver query.
+
+    The exports contain useful authorship, venue, status, date, and DOI evidence.
+    Reducing APA or quoted records to a title discarded that evidence and produced
+    inconsistent values across otherwise equivalent records.
+    """
     cleaned = re.sub(r"^(?:[*\u2022-]|\d+[.)])\s*", "", citation).strip()
     if 8 <= len(cleaned) <= 600:
         return cleaned, "dm_full_citation", 0.78
@@ -228,10 +247,9 @@ def extract_report(path: Path) -> tuple[list[dict], dict]:
             continue
         if section == "presentations" and (block.style == "Heading3" or block.bold) and not is_major_heading(block):
             continue
-        # Preserve the legacy publication boundary behavior so existing article
-        # extraction is byte-for-byte stable. Presentation sections need the broader
-        # major-heading stop because their subtype headings are less standardized.
-        if ((section == "publications" and STOP_SECTION_RE.match(text))
+        # Heading 2 starts a new top-level resume section. Subtypes inside publication
+        # and presentation sections use Heading 3 or bold body text instead.
+        if ((section == "publications" and (STOP_SECTION_RE.match(text) or is_major_heading(block)))
                 or (section == "presentations" and (STOP_SECTION_RE.match(text) or is_major_heading(block)))):
             section, category = "", ""
             continue
@@ -246,13 +264,14 @@ def extract_report(path: Path) -> tuple[list[dict], dict]:
             "pdf_page": "", "faculty_heading": faculty, "title": title,
             "raw_citation": text, "extraction_method": method,
             "confidence": f"{confidence:.2f}", "needs_review": confidence < 0.75,
-            "category": category or ("presentation" if section == "presentations" else "other"),
+            "category": citation_category(
+                category or ("presentation" if section == "presentations" else "other"), text
+            ),
             "is_ongoing": is_ongoing_work(text),
         })
     deduped, seen = [], set()
     for row in rows:
-        # Keep the legacy key: changing deduplication here would silently add article
-        # records when the same title also appears under another category.
+        # Deduplicate identical normalized records within the same faculty resume.
         key = (row["faculty_heading"].casefold(),
                re.sub(r"[^a-z0-9]+", " ", row["title"].casefold()).strip())
         if key in seen:
@@ -342,7 +361,7 @@ def main() -> None:
     args = parser.parse_args()
     if not args.input_dir.exists():
         raise SystemExit(f"Digital Measures input directory not found: {args.input_dir}")
-    paths = sorted([*args.input_dir.glob("*.docx"), *args.input_dir.glob("*.DOCX")])
+    paths = report_paths(args.input_dir)
     rows, summaries, owner_records = [], [], []
     for path in paths:
         extracted, summary = extract_report(path)

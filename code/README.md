@@ -22,15 +22,15 @@ python3 code/extract_digitalmeasure_publications.py
 ```
 
 The report year is read from each `.docx` filename. The extractor tracks the current
-faculty/staff name and publication subsection, preserves the complete citation and
-faculty attribution as provenance, and writes a separate audit summary to
-`results/digitalmeasure_extraction_summary.json`. It also writes
+faculty/staff name and publication subsection, preserves the complete citation as the
+resolver query together with faculty attribution and provenance, and writes a separate
+audit summary to `results/digitalmeasure_extraction_summary.json`. It also writes
 `results/digitalmeasure_extracted_records.csv`, whose `category` column contains
 `article`, `book`, `book_chapter`, `presentation`, or `other`. Every category is
-retained for audit, and `is_ongoing` flags citations marked as ongoing, on-going, or
-on going. Presentations and ongoing works are excluded from the Crossref/OpenAlex
-candidate file; publication-ready articles, books, chapters, and other works are
-forwarded for resolution. Reruns are idempotent by record ID.
+retained for audit, and `is_ongoing` flags citations marked as ongoing, submitted,
+working paper, or reviewed-not-accepted. Presentations and ongoing works are excluded
+from the Crossref/OpenAlex candidate file; publication-ready articles, books, chapters,
+and other works are forwarded for resolution. Reruns are idempotent by record ID.
 The same extraction builds `results/institutional_faculty_registry.csv`, a stable-ID
 roster. Digital Measures resume owners provide the canonical name when available;
 annual-report headings add year-bounded historical-only people. Before any network
@@ -43,10 +43,10 @@ Use `--replace-digitalmeasure` after changing extraction logic to replace only p
 Digital Measures rows while preserving all PDF-derived candidates.
 - `results/extraction_summary.json` - counts, page ranges, and QA statistics
 
-The raw citation and its report/page provenance are retained. Rows without a usable
-title are discarded, and exact normalized-title duplicates within a report are removed.
-`needs_review` is true when the title heuristic is uncertain. Those rows should be
-reviewed before DOI resolution and publication downloading.
+The complete citation and its report/page provenance are retained. Rows without a
+usable citation are discarded, and exact normalized-citation duplicates within a report
+are removed. `needs_review` is true when a citation cannot be retained confidently.
+Those rows should be reviewed before DOI resolution and publication downloading.
 
 Known QA items:
 
