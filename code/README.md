@@ -1,209 +1,366 @@
 # Scholarly impact pipeline
 
-## Stage 1: annual-report publication extraction
+This directory contains the reproducible data pipeline behind the Research Connections
+Atlas. Run commands from the repository root. Generated files under `results/`, local
+source reports, downloaded content, and review workbooks are intentionally ignored by
+Git; reviewed CSV decisions and source code are tracked.
 
-Run from the repository root:
+For the repository-wide architecture, see the larger Mermaid diagram in the root
+[`README.md`](../README.md#pipeline-at-a-glance). The diagram below focuses on the two
+pipeline entry points and their handoff to the website.
 
-```bash
-python3 code/extract_publications.py
+## How the pipeline fits together
+
+```mermaid
+flowchart TB
+    reports["Annual-report PDFs<br/>Digital Measures DOCX files"]
+    identity["Faculty identifiers<br/>name and attribution overrides"]
+    population["run_population_pipeline.py<br/>extract, resolve, curate metadata,<br/>refresh work impact, reconcile"]
+    candidates["Publication candidates<br/>faculty registry<br/>resolution metadata<br/>work impact"]
+    review["Optional review workbooks<br/>metadata and attribution"]
+    feedback["Optional deployed<br/>attribution feedback"]
+    refresh["run_refresh_pipeline.py<br/>cluster, label, attribute,<br/>aggregate impact, export"]
+    analysis["Topics, embeddings,<br/>faculty attribution and impact"]
+    webdata["Validated results/webapp package"]
+    publicdata["Selected webapp/public/data files"]
+    build["Validated production website build"]
+    deploy["Separate Sites publishing workflow"]
+
+    reports --> population
+    identity --> population
+    population --> candidates
+    candidates --> review
+    review -. "reviewed corrections" .-> population
+    candidates --> refresh
+    identity --> refresh
+    review -. "reviewed corrections" .-> refresh
+    feedback -. "when configured" .-> refresh
+    refresh --> analysis
+    analysis --> webdata
+    webdata --> publicdata
+    publicdata --> build
+    build --> deploy
 ```
 
-The script reads `data/Annual-Reports/*.pdf` and writes:
+The population pipeline establishes the publication corpus and metadata. The refresh
+pipeline performs the downstream analyses and prepares the files consumed by the web
+application. Neither command deploys the website; deployment is a separate Sites or
+hosting-provider action after validation.
 
-- `results/publication_candidates.csv` - review-friendly tabular data
-- `results/publication_candidates.jsonl` - machine-friendly pipeline input
+## Normal workflow
 
-Digital Measures Word reports use a separate, resume-by-resume layout. After the
-annual-report PDF extraction, append their publication records to the same OpenAlex
-candidate CSV with:
+### 1. Validate the environment
 
 ```bash
-python3 code/extract_digitalmeasure_publications.py
+python3 scripts/doctor.py --strict
 ```
 
-The report year is read from each `.docx` filename. The extractor tracks the current
-faculty/staff name and publication subsection, preserves the complete citation and
-faculty attribution as provenance, and writes a separate audit summary to
-`results/digitalmeasure_extraction_summary.json`. Reruns are idempotent by record ID.
-Use `--replace-digitalmeasure` after changing extraction logic to replace only prior
-Digital Measures rows while preserving all PDF-derived candidates.
-- `results/extraction_summary.json` - counts, page ranges, and QA statistics
-
-The raw citation and its report/page provenance are retained. Rows without a usable
-title are discarded, and exact normalized-title duplicates within a report are removed.
-`needs_review` is true when the title heuristic is uncertain. Those rows should be
-reviewed before DOI resolution and publication downloading.
-
-Known QA items:
-
-- The 1999 report is image-only and requires an OCR dependency before extraction.
-- The 1997 layout does not consistently separate citations in its text layer, so its
-  rows should be manually compared with the report before downstream use.
-- Candidate counts can exceed narrative publication counts because a single book
-  record may mention multiple titled chapters and because extraction favors recall.
-
-Planned downstream stages are: citation/DOI resolution, rights-aware PDF retrieval,
-text extraction, research-theme embeddings or supervised classification, and an
-interactive researcher-publication-topic network application.
-
-## End-to-end data population harness
-
-Run both report extractors, Crossref/OpenAlex resolution and legal OA downloads, and
-publication-count reconciliation with one command:
+Install ordinary dependencies with `./scripts/bootstrap.sh`. Install the optional,
+larger topic-modeling environment with:
 
 ```bash
-python3 code/run_population_pipeline.py \
+uv sync --extra topic
+```
+
+### 2. Preview extraction changes
+
+This reruns both extractors in temporary staging without changing results or making
+network requests:
+
+```bash
+.venv/bin/python code/run_population_pipeline.py \
+  --mode rebuild \
+  --dry-run \
+  --skip-resolution \
+  --skip-reconciliation \
+  --skip-impact-refresh
+```
+
+### 3. Populate or update the publication corpus
+
+Use append mode for routine additions. Store the OpenAlex key at the single documented
+path `.secrets/openalex_api_key`; never commit it.
+
+```bash
+.venv/bin/python code/run_population_pipeline.py \
   --mode append \
   --openalex-api-key-file .secrets/openalex_api_key
 ```
 
-`--mode append` preserves the candidate dataset and resolver cache, adds only unseen
-report records, and resolves only uncached candidates. `--mode rebuild` replaces the
-candidate CSV/JSONL from the current PDF and Word reports, prunes stale cache records,
-and re-resolves every current candidate. Use `--dry-run` to inspect extraction and
-merge counts without changing results or making network requests. Other useful flags
-include `--no-download`, `--limit N`, `--skip-resolution`,
-`--skip-openalex-fallback`, and `--skip-reconciliation`.
+Use `--mode rebuild` after extraction rules change or source reports are removed. A
+rebuild replaces the candidate CSV/JSONL, prunes stale resolver-cache entries, and
+re-resolves every current candidate. It can therefore make thousands of network
+requests and take substantially longer than append mode.
 
-## Publication-count reconciliation
+Useful population flags:
 
-```bash
-python3 code/reconcile_publication_counts.py
-```
+- `--no-download`: resolve metadata without downloading open-access PDFs.
+- `--limit N`: limit each resolution or impact pass for a small test run.
+- `--skip-resolution`: extract and reconcile without metadata network requests.
+- `--skip-openalex-fallback`: omit direct OpenAlex searches for unmatched records.
+- `--skip-impact-refresh`: reuse the current publication-impact data.
+- `--skip-reconciliation`: omit comparison with annual narrative counts.
+- `--dry-run`: stage extraction and report candidate counts without modifying results.
 
-This compares `Scholarly Papers Published` in `data/Annual Report compilation.xlsx`
-with annual candidate, parsed-title, high-confidence-title, and normalized unique-title
-counts. The image-only 1999 report is excluded by default. Results are written to
-`results/publication_count_reconciliation.csv` and JSON.
+The population pipeline runs, in order:
 
-## Stage 2: metadata resolution and open-access PDF retrieval
+1. annual-report PDF extraction;
+2. Digital Measures extraction and faculty-registry construction;
+3. candidate append or rebuild;
+4. Crossref resolution and optional OpenAlex fallback;
+5. publication metadata curation import, when the workbook exists;
+6. optional OpenAlex publication-impact refresh; and
+7. publication-count reconciliation.
 
-Test a small resumable batch:
+### 4. Refresh analyses and application data
 
-```bash
-export CROSSREF_MAILTO="you@example.edu"
-export UNPAYWALL_EMAIL="you@example.edu"      # recommended for OA locations
-export OPENALEX_API_KEY="..."                 # optional
-python3 code/resolve_and_download_publications.py --limit 25
-```
-
-To keep the OpenAlex key out of the shell environment and tool output, place the raw
-key in `.secrets/openalex_api_key` and run:
-
-```bash
-python3 code/resolve_and_download_publications.py \
-  --openalex-api-key-file .secrets/openalex_api_key --limit 25
-```
-
-Continue the run by executing the same command without `--limit`. Resolved metadata,
-scores, URLs, licenses, and download status are written under
-`results/publication_resolution/`. Validated open-access PDFs are stored in
-`data/publication_pdfs/`. Available abstracts are stored in the resolution CSV and as
-plain-text files under `data/publication_abstracts/`. The cache makes interrupted runs
-resumable.
-
-### Human publication metadata curation
-
-Reviewers can edit `data/publication_metadata_curation.xlsx` directly. The
-`Publication Curation` sheet contains one row per resolved publication. Paste a missing
-abstract into `abstract`, or correct `title`, `publication_year`, `doi`, `authors`, or
-`landing_url`. Identity columns are protected, and optional `contributor` and `notes`
-fields provide an audit trail.
-
-The importer compares the visible values with the workbook's read-only reference sheet and
-applies only changed cells, propagating a correction to every annual-report record for
-the same work:
-
-```bash
-python3 code/apply_publication_metadata_curation.py
-```
-
-Both population and analytical refresh pipelines run this importer automatically, so
-automated metadata resolution may be refreshed without losing human corrections.
-
-Only titles with extraction confidence at least 0.75 are resolved by default. Only
-PDF locations exposed as open access or accompanied by license metadata are downloaded;
-the script does not bypass authentication or paywalls.
-
-After the Crossref pass, directly search OpenAlex for cached unmatched records:
-
-```bash
-python3 code/resolve_and_download_publications.py \
-  --openalex-api-key-file .secrets/openalex_api_key --openalex-fallback
-```
-
-The fallback requires a strong, unambiguous title match and uses publication year as
-additional evidence. It enriches accepted matches with abstracts and OA PDFs. Accepted
-fallback matches are also written to
-`results/publication_resolution/openalex_fallback_matches.csv` for focused human review.
-
-## Stage 3: abstract topic discovery
-
-```bash
-uv venv .venv
-uv pip install --python .venv/bin/python -r code/topic_model_requirements.txt
-.venv/bin/python code/cluster_publications.py
-```
-
-The default pipeline embeds canonical titles plus abstracts with SPECTER2, reduces the
-embedding space with UMAP, discovers topics with HDBSCAN, and extracts interpretable
-c-TF-IDF terms. Outputs are written to `results/topic_model_specter2/`.
-
-### Live abstract matching
-
-The atlas's “Match an abstract” tab uses a small companion inference service so the
-deployed edge app does not need to load the SPECTER2 model itself. Start it from the
-repository root with `python code/serve_specter2_matcher.py`. Configure the website's
-`SPECTER2_ENDPOINT_URL` as the public service URL ending in `/match`. If the service
-sets `SPECTER2_API_TOKEN`, configure the website with the same secret. Abstracts are
-processed in memory and are not stored by this service.
-
-## Stage 4: web-app data build
-
-After labeling and propagating topics, build the complete static data package:
-
-```bash
-python3 code/label_and_propagate_topics.py
-python3 code/build_webapp_data.py
-```
-
-The builder writes validated entity, graph, search, provenance, and feedback-contract
-artifacts under `results/webapp/`. Stable IDs are used for faculty, publications,
-topics, and edges. `manifest.json` records schema and model versions, parameters,
-counts, integrity checks, file sizes, and SHA-256 checksums.
-
-Research-similarity edges combine faculty publication-embedding similarity with topic-
-profile similarity. They represent possible intellectual overlap, not coauthorship.
-`coauthor_edges.json` is intentionally empty until author identity resolution is run.
-
-`feedback_config.json` defines valid targets and submission values for topic-quality,
-attribution, and metadata feedback. The web app persists submissions in its hosted
-database and exposes attribution complaints only through an administrator-protected
-pipeline endpoint.
-
-## Full analytical and app-data refresh
-
-Run the complete topic, attribution, export, and application build pipeline with:
+The default command retrieves configured feedback, imports a local reviewed attribution
+workbook when present, applies publication curation, reruns SPECTER2, resolves faculty
+attribution, aggregates faculty impact, builds validated web data, copies the seven
+runtime JSON files into `webapp/public/data`, and builds the production application.
 
 ```bash
 .venv/bin/python code/run_refresh_pipeline.py
 ```
 
-The pipeline securely downloads attribution feedback, reruns SPECTER2 topic
-clustering, applies the curated topic labels, resolves faculty attribution, rebuilds
-the web-app graph/search data, copies the current artifacts into `webapp/public/data`,
-and validates the production application build. Use `--skip-clustering` while
-developing downstream stages to reuse the existing topic model.
+Useful refresh flags:
 
-Faculty resolution combines annual-report headings, resolved publication authors,
-and citation-leading names. It rejects a heading only when the citation lead and
-resolved author evidence identify a different known faculty member; incomplete
-metadata alone does not remove an attribution. Approved corrections live in
-`data/faculty_attribution_overrides.csv`, making feedback decisions auditable and
-durable across reruns. Newly submitted complaints are exported to
-`results/feedback/attribution_feedback_review.csv` and marked `needs_review` until
-an approved override is added.
+- `--skip-clustering`: reuse current embeddings and topic assignments.
+- `--skip-feedback-fetch`: do not retrieve deployed attribution feedback.
+- `--skip-attribution-review-import`: do not import the local reviewed workbook.
+- `--skip-app-build`: rebuild data without validating the production web build.
+- `--device auto|cpu|mps|cuda`: select the SPECTER2 execution device.
+- `--refresh-openalex-impact --openalex-api-key-file .secrets/openalex_api_key`:
+  refresh publication impact before faculty aggregation.
 
-Set `FEEDBACK_EXPORT_URL` (or pass `--url` directly to
-`fetch_attribution_feedback.py`) for the deployed college-specific feedback endpoint.
-The default source code intentionally contains no personal deployment URL.
+Feedback retrieval requires `FEEDBACK_EXPORT_URL` or `.secrets/feedback_export_url`
+plus the configured administrator key. When those are not available or feedback should
+remain unchanged, pass `--skip-feedback-fetch`.
+
+### 5. Validate and publish the website
+
+The refresh pipeline runs the production build unless `--skip-app-build` is supplied.
+Before publishing independently, run:
+
+```bash
+npm --prefix webapp run lint
+npm --prefix webapp test
+```
+
+Publishing to OpenAI Sites or another host is intentionally separate from data
+generation. Publish only after `webapp/public/data/manifest.json` and the production
+build represent the desired analysis run.
+
+## Output map
+
+### Population outputs
+
+- `results/publication_candidates.csv` and `.jsonl`: resolver-ready source records.
+- `results/extraction_summary.json`: annual-report extraction QA.
+- `results/digitalmeasure_extracted_records.csv`: all Digital Measures categories,
+  including presentations and unfinished work retained for audit only.
+- `results/digitalmeasure_extraction_summary.json`: Digital Measures counts and QA.
+- `results/institutional_faculty_registry.csv`: stable institutional faculty roster.
+- `results/publication_resolution/`: Crossref/OpenAlex results and resumable cache.
+- `results/impact/current_work_impact.csv`: current publication-level impact measures.
+- `results/impact/work_impact_snapshots.csv`: dated successful impact observations.
+- `results/publication_count_reconciliation.csv` and `.json`: annual count comparison.
+
+### Analytical outputs
+
+- `results/topic_model_specter2/`: embeddings, coordinates, topics, labels, assignments,
+  faculty-topic summaries, and topic QA.
+- `results/faculty_attribution/`: final attributions, identity profiles,
+  disambiguation audit, registry, and QA.
+- `results/impact/faculty_impact_summary.csv`: corpus-scoped faculty impact calculated
+  only after final attribution.
+- `results/webapp/`: complete validated entity, graph, search, semantic-index,
+  provenance, feedback-contract, and manifest package.
+
+### Published runtime files
+
+`run_refresh_pipeline.py` copies these files into `webapp/public/data/`:
+
+- `faculty.json`
+- `topics.json`
+- `faculty_profiles.json`
+- `faculty_similarity_edges.json`
+- `faculty_topic_edges.json`
+- `publications.json`
+- `manifest.json`
+
+The complete `results/webapp/` package contains additional provenance, graph, search,
+and semantic-index artifacts used for validation and supporting services. Coauthor
+edges are currently emitted as an empty, reserved dataset; generating coauthor edges
+is not yet implemented, even though publication-author identity resolution is.
+
+## Manual stage reference
+
+The orchestration commands above are preferred. Run individual stages when developing,
+debugging, or reviewing a specific boundary.
+
+### Annual-report extraction
+
+```bash
+.venv/bin/python code/extract_publications.py
+```
+
+The extractor reads `data/Annual-Reports/*.pdf`. The 1999 report is image-only and
+requires an OCR workflow before it can be extracted. The 1997 text layer should be
+manually sampled because its citation boundaries are inconsistent.
+
+### Digital Measures extraction
+
+```bash
+.venv/bin/python code/extract_digitalmeasure_publications.py
+```
+
+The extractor reads `data/DigitalMeasure-Reports/*.docx`, ignores temporary Microsoft
+Office lock files, tracks resume owners and publication subsections, and retains the
+complete citation as provenance and the resolver query. Audit categories are `article`,
+`book`, `book_chapter`, `presentation`, and `other`.
+
+Records explicitly marked ongoing, submitted, working paper, or reviewed-not-accepted
+remain in the audit file but are not sent for external resolution. Presentations are
+also audit-only. Use `--replace-digitalmeasure` when directly rerunning this script
+against an existing mixed candidate CSV; prefer population `--mode rebuild` after a
+material extraction-rule change.
+
+### Metadata resolution and lawful OA retrieval
+
+For a small resumable batch:
+
+```bash
+export CROSSREF_MAILTO="you@example.edu"
+export UNPAYWALL_EMAIL="you@example.edu"
+.venv/bin/python code/resolve_and_download_publications.py \
+  --openalex-api-key-file .secrets/openalex_api_key \
+  --limit 25
+```
+
+Remove `--limit` to continue. Add `--no-download` to resolve metadata without fetching
+PDFs. The resolver uses only open-access or license-qualified locations and does not
+bypass authentication. Direct OpenAlex fallback for cached unmatched records is:
+
+```bash
+.venv/bin/python code/resolve_and_download_publications.py \
+  --openalex-api-key-file .secrets/openalex_api_key \
+  --openalex-fallback
+```
+
+### Publication metadata curation
+
+Generate the review workbook from the current resolution data:
+
+```bash
+node code/create_publication_curation_workbook.mjs
+```
+
+Reviewers edit only the yellow cells on `Publication Curation`; the hidden baseline is
+the comparison source. To apply reviewed differences manually:
+
+```bash
+.venv/bin/python code/apply_publication_metadata_curation.py
+```
+
+The population and refresh pipelines run the importer automatically. The generated
+workbook is ignored and is not the authoritative source for repository history.
+
+### Publication-count reconciliation
+
+```bash
+.venv/bin/python code/reconcile_publication_counts.py
+```
+
+This compares `Scholarly Papers Published` in `data/Annual Report compilation.xlsx`
+with extracted candidate counts. The image-only 1999 report is excluded by default.
+
+### Topic modeling
+
+```bash
+.venv/bin/python code/cluster_publications.py
+```
+
+The model embeds canonical titles plus abstracts with SPECTER2, reduces the embedding
+space with UMAP, discovers topics with HDBSCAN, and extracts c-TF-IDF terms.
+
+### Topic labeling, faculty attribution, impact, and web data
+
+Run these stages in this order when not using `run_refresh_pipeline.py`:
+
+```bash
+.venv/bin/python code/label_and_propagate_topics.py --labels-only
+.venv/bin/python code/resolve_faculty_attributions.py
+.venv/bin/python code/build_faculty_impact_summary.py
+.venv/bin/python code/build_webapp_data.py
+```
+
+Similarity edges represent possible intellectual overlap, not coauthorship,
+endorsement, or an institutional recommendation.
+
+### Faculty attribution review round trip
+
+Generate the review workbook after population and faculty attribution:
+
+```bash
+node code/create_faculty_attribution_review_workbook.mjs
+```
+
+Upload `data/faculty_attribution_review.xlsx` to Google Sheets if collaborative review
+is needed. Reviewers edit only the yellow columns on `Canonical Faculty`, `Attribution
+Review`, and `Exceptions`. Download the reviewed workbook to the same path, then run:
+
+```bash
+.venv/bin/python code/import_faculty_attribution_review.py --dry-run
+.venv/bin/python code/import_faculty_attribution_review.py
+```
+
+The importer upserts tracked decisions in
+`data/faculty_attribution_review_decisions.csv` and derives the tracked name and
+attribution override CSVs. Use `clear` to withdraw a previously imported decision.
+
+### Curated faculty identifiers
+
+Add verified ORCIDs to `data/faculty_identifiers.csv` using stable `faculty_id` values:
+
+```csv
+faculty_id,faculty_name,orcid,source,verified_at,notes
+fac_example1234567,Jane Q. Scholar,0000-0002-1825-0097,faculty_provided,2026-08-06,
+```
+
+ORCIDs are normalized and checksum-validated. Exact curated ORCIDs provide strong
+identity evidence but do not independently add unrelated publications to the corpus.
+
+### Publication and faculty impact
+
+Refresh publication-level OpenAlex measures with:
+
+```bash
+.venv/bin/python code/refresh_openalex_impact.py \
+  --openalex-api-key-file .secrets/openalex_api_key
+```
+
+This stores aggregate work measures, not citing-work records or citation edges. It
+writes the current work file and appends successful dated observations. Faculty impact
+must be aggregated only after final attribution:
+
+```bash
+.venv/bin/python code/build_faculty_impact_summary.py
+```
+
+The faculty summary reports corpus-scoped measures, including explicitly named
+`corpus_h_index` and `corpus_i10_index`; it does not use OpenAlex lifetime-author
+totals.
+
+### Live abstract matching service
+
+The deployed atlas's “Match an abstract” feature uses a companion SPECTER2 inference
+service. Start it locally with:
+
+```bash
+.venv/bin/python code/serve_specter2_matcher.py
+```
+
+Configure the website with `SPECTER2_ENDPOINT_URL` ending in `/match`. If the service
+uses `SPECTER2_API_TOKEN`, configure the website with the same secret. Submitted
+abstracts are processed in memory and are not stored by this service.

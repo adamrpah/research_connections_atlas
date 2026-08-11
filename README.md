@@ -4,6 +4,81 @@ A reusable pipeline and web application for turning college publication records 
 
 The repository is designed so a new contributor can clone it, attach the folder to Codex, validate the machine, and begin work without copying another computer's virtual environment, credentials, caches, or chat history.
 
+## Pipeline at a glance
+
+```mermaid
+flowchart TB
+    classDef editable fill:#fff2cc,stroke:#9a6700,color:#24292f,stroke-width:2px
+    classDef generated fill:#ddf4ff,stroke:#0969da,color:#24292f
+    classDef published fill:#dafbe1,stroke:#1a7f37,color:#24292f
+
+    subgraph inputs["Institutional inputs — local and editable"]
+        reports["data/Annual-Reports/*.pdf<br/>data/DigitalMeasure-Reports/*.docx"]:::editable
+        identity["data/faculty_identifiers.csv<br/>data/faculty_name_overrides.csv"]:::editable
+        attribution_edits["data/faculty_attribution_overrides.csv<br/>data/faculty_attribution_review_decisions.csv"]:::editable
+        metadata_edits["data/publication_metadata_curation.xlsx<br/>Generated metadata-review workbook; editable"]:::editable
+    end
+
+    extract["1. Extract and classify records<br/>presentations and ongoing work remain audit-only"]
+    resolve["2. Resolve publication metadata<br/>Crossref + OpenAlex"]
+    impact["3. Refresh publication impact<br/>OpenAlex measures + local calculations; no citation records"]
+    model["4. Embed, cluster, and label topics"]
+    attribute["5. Resolve faculty identity and attribution<br/>local evidence + curated ORCID + OpenAlex"]
+    faculty_impact["6. Aggregate faculty impact<br/>only after reviewed attribution"]
+    export["7. Build validated web dataset"]
+
+    reports --> extract
+    identity --> extract
+    extract --> candidates
+    candidates --> resolve
+    metadata_edits -. "review corrections" .-> resolve
+    resolution --> metadata_edits
+    resolve --> resolution
+    resolution --> impact
+    resolution --> model
+    candidates --> model
+    model --> attribute
+    identity --> attribute
+    attribution_edits --> attribute
+    attribute --> faculty_impact
+    impact --> faculty_impact
+    attribute --> export
+    faculty_impact --> export
+    impact --> export
+    model --> export
+
+    candidates["results/<br/>publication_candidates.csv + .jsonl<br/>extraction_summary.json<br/>digitalmeasure_extracted_records.csv<br/>digitalmeasure_extraction_summary.json<br/>institutional_faculty_registry.csv<br/>population_pipeline_summary.json<br/>publication_count_reconciliation.csv + .json"]:::generated
+
+    resolution["results/publication_resolution/<br/>publication_resolution.csv<br/>resolution_cache.jsonl<br/>openalex_fallback_matches.csv<br/>resolution_summary.json<br/><br/>data/publication_pdfs/<br/>data/publication_abstracts/"]:::generated
+
+    impact_outputs["results/impact/<br/>current_work_impact.csv<br/>work_impact_snapshots.csv<br/>impact_qa.json<br/>faculty_impact_summary.csv<br/>faculty_impact_qa.json"]:::generated
+    impact --> impact_outputs
+    faculty_impact --> impact_outputs
+
+    model["4. Embed, cluster, and label topics<br/><br/>results/topic_model_specter2/<br/>embeddings.npy · coordinates_2d.npy<br/>article_topic_assignments.csv<br/>topics.csv + topics.json · metrics.json<br/>labeled_topics.csv + .json<br/>labeled_article_topics.csv<br/>faculty_topic_publications.csv<br/>unattributed_topic_publications.csv<br/>faculty_topic_summary.csv<br/>faculty_topic_matrix.csv<br/>faculty_topic_profiles.json<br/>faculty_topic_qa.json"]:::generated
+
+    attribution_outputs["results/faculty_attribution/<br/>article_faculty_attributions.csv<br/>faculty_registry.csv<br/>faculty_author_identity_profiles.csv<br/>author_disambiguation_audit.csv<br/>qa.json"]:::generated
+    attribute --> attribution_outputs
+
+    feedback["results/feedback/<br/>attribution_feedback.json<br/>attribution_feedback_review.csv"]:::generated
+    feedback -. "approved corrections" .-> attribution_edits
+
+    review_book["data/faculty_attribution_review.xlsx<br/>Generated review interface; yellow columns are editable<br/>download/import decisions back into tracked CSVs"]:::editable
+    attribution_outputs --> review_book
+    google_review["Shared Google Sheet<br/>Optional public or restricted collaborative review copy<br/>reviewers edit the same yellow decision columns"]:::editable
+    review_book -- "upload .xlsx" --> google_review
+    google_review -- "download reviewed .xlsx" --> review_book
+    review_book -. "review round trip" .-> attribution_edits
+
+    webdata["results/webapp/<br/>faculty.json · topics.json · publications.json<br/>faculty_profiles.json · publication_provenance.json<br/>graph_nodes.json · graph_edges.json<br/>faculty_topic_edges.json · faculty_similarity_edges.json<br/>publication_faculty_edges.json · coauthor_edges.json<br/>search_documents.json · semantic_search_index.json<br/>semantic_search_embeddings.npy<br/>feedback_config.json · manifest.json"]:::generated
+    export --> webdata
+    published_data["webapp/public/data/<br/>faculty.json · topics.json · publications.json<br/>faculty_profiles.json · faculty_topic_edges.json<br/>faculty_similarity_edges.json · manifest.json"]:::published
+    webdata --> published_data
+    published_data --> app["Research Connections Atlas web application"]:::published
+```
+
+Yellow nodes are human-editable inputs or review interfaces. Blue nodes are reproducible local outputs and should not be edited directly. Green nodes are the generated assets copied into the web application for publication. Raw institutional inputs, downloaded content, review workbooks, and `results/` are ignored by Git; the curated CSV decision files are tracked.
+
 ## New-computer quick start
 
 ### 1. Clone and enter the repository

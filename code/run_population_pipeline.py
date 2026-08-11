@@ -24,7 +24,9 @@ from pathlib import Path
 
 FIELDS = [
     "record_id", "report_year", "report_file", "pdf_page", "faculty_heading",
-    "title", "raw_citation", "extraction_method", "confidence", "needs_review",
+    "title", "raw_citation", "extraction_method", "confidence", "needs_review", "category",
+    "is_ongoing", "institutional_faculty_ids", "institutional_faculty_names",
+    "institutional_author_evidence",
 ]
 
 
@@ -75,6 +77,8 @@ def main() -> None:
     parser.add_argument("--pdf-input-dir", type=Path, default=Path("data/Annual-Reports"))
     parser.add_argument("--digitalmeasure-input-dir", type=Path, default=Path("data/DigitalMeasure-Reports"))
     parser.add_argument("--candidates", type=Path, default=Path("results/publication_candidates.csv"))
+    parser.add_argument("--faculty-identifiers", type=Path,
+                        default=Path("data/faculty_identifiers.csv"))
     parser.add_argument("--resolution-dir", type=Path, default=Path("results/publication_resolution"))
     parser.add_argument("--openalex-api-key-file", type=Path)
     parser.add_argument("--limit", type=int, help="Limit records handled in each resolution pass")
@@ -82,6 +86,8 @@ def main() -> None:
     parser.add_argument("--skip-openalex-fallback", action="store_true")
     parser.add_argument("--skip-resolution", action="store_true", help="Extract and reconcile without network resolution")
     parser.add_argument("--skip-reconciliation", action="store_true")
+    parser.add_argument("--skip-impact-refresh", action="store_true",
+                        help="Do not retrieve publication-level OpenAlex impact measures")
     parser.add_argument("--dry-run", action="store_true", help="Extract and report candidate changes without modifying results or resolving")
     args = parser.parse_args()
 
@@ -108,6 +114,10 @@ def main() -> None:
             "--input-dir", str(root / args.digitalmeasure_input_dir),
             "--candidates", str(staging / "publication_candidates.csv"),
             "--summary", str(staging / "digitalmeasure_extraction_summary.json"),
+            "--all-records-output", str(staging / "digitalmeasure_extracted_records.csv"),
+            "--faculty-registry-output", str(staging / "institutional_faculty_registry.csv"),
+            "--faculty-name-overrides", str(root / "data/faculty_name_overrides.csv"),
+            "--faculty-identifiers", str(root / args.faculty_identifiers),
         ], "Digital Measures extraction", root)
 
         extracted = read_candidates(staging / "publication_candidates.csv")
@@ -132,6 +142,14 @@ def main() -> None:
         shutil.copy2(
             staging / "digitalmeasure_extraction_summary.json",
             results / "digitalmeasure_extraction_summary.json",
+        )
+        shutil.copy2(
+            staging / "digitalmeasure_extracted_records.csv",
+            results / "digitalmeasure_extracted_records.csv",
+        )
+        shutil.copy2(
+            staging / "institutional_faculty_registry.csv",
+            results / "institutional_faculty_registry.csv",
         )
         (results / "population_pipeline_summary.json").write_text(
             json.dumps(status, indent=2) + "\n", encoding="utf-8"
@@ -168,6 +186,17 @@ def main() -> None:
             python, str(root / "code/apply_publication_metadata_curation.py"),
             "--resolution", str(resolution_path),
         ], "human metadata curation", root)
+        if args.openalex_api_key_file and not args.skip_impact_refresh:
+            impact_command = [
+                python, str(root / "code/refresh_openalex_impact.py"),
+                "--resolution", str(resolution_path),
+                "--openalex-api-key-file", str(root / args.openalex_api_key_file),
+            ]
+            if args.limit is not None:
+                impact_command += ["--limit", str(args.limit)]
+            run(impact_command, "OpenAlex publication impact refresh", root)
+        elif not args.openalex_api_key_file and not args.skip_impact_refresh:
+            print("\n[OpenAlex publication impact] skipped: no --openalex-api-key-file supplied")
 
     if not args.skip_reconciliation:
         run([

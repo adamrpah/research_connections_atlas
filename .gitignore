@@ -45,6 +45,7 @@ data/model_cache/
 data/Annual Report compilation.xlsx
 data/publication_metadata_curation.xlsx
 data/publication_metadata_curation.xlsx.inspect.ndjson
+data/faculty_attribution_review.xlsx
 results/
 
 # Generated application dataset. A checkout starts with the small demo fixture.
